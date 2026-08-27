@@ -1,0 +1,1052 @@
+{
+  "info": {
+    "_postman_id": "8f3b6a22-1d54-4a29-87a4-84c1f9b3e100",
+    "name": "Payroll Attendance API",
+    "description": "Complete Postman API Collection for WorkPulse - Payroll Staff Attendance Capture System connected to Spring Boot & PostgreSQL.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{authToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "var token = pm.environment.get('authToken');",
+          "var urlPath = pm.request.url.getPath ? pm.request.url.getPath() : '';",
+          "var isAuthEndpoint = (urlPath.indexOf('login') !== -1 || urlPath.indexOf('health') !== -1 || urlPath.indexOf('google') !== -1);",
+          "if (!token && !isAuthEndpoint) {",
+          "    var baseUrl = pm.environment.get('baseUrl') || 'http://localhost:8080/api';",
+          "    var adminEmail = pm.environment.get('adminEmail') || 'admin@workpulse.com';",
+          "    var adminPassword = pm.environment.get('adminPassword') || 'Admin@123';",
+          "    pm.sendRequest({",
+          "        url: baseUrl + '/auth/login',",
+          "        method: 'POST',",
+          "        header: { 'Content-Type': 'application/json' },",
+          "        body: {",
+          "            mode: 'raw',",
+          "            raw: JSON.stringify({ emailOrId: adminEmail, password: adminPassword })",
+          "        }",
+          "    }, function (err, res) {",
+          "        if (!err && res.code === 200) {",
+          "            var resJson = res.json();",
+          "            if (resJson && resJson.data && resJson.data.token) {",
+          "                pm.environment.set('authToken', resJson.data.token);",
+          "                pm.request.headers.upsert({ key: 'Authorization', value: 'Bearer ' + resJson.data.token });",
+          "            }",
+          "        }",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Health",
+      "item": [
+        {
+          "name": "Health Check & Database State",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status code is 200', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('Database is connected to PostgreSQL', function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data.database).to.eql('CONNECTED');",
+                  "    pm.expect(json.data.databaseProduct).to.eql('PostgreSQL');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 - Authentication",
+      "item": [
+        {
+          "name": "Admin Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emailOrId\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "    pm.expect(json.data.token).to.not.be.empty;",
+                  "    pm.environment.set('authToken', json.data.token);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Current User Profile (/me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{authToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Profile returned with active user details', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data.email).to.eql('admin@workpulse.com');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "HR Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emailOrId\": \"{{hrEmail}}\",\n  \"password\": \"{{hrPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data.role).to.eql('hr');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Field Staff Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emailOrId\": \"{{employeeEmail}}\",\n  \"password\": \"{{employeePassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data.role).to.eql('fieldStaff');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Google Sign-In",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@workpulse.com\",\n  \"name\": \"System Admin\",\n  \"googleSubjectId\": \"G-1029384756\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/google",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "google"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 - Employees",
+      "item": [
+        {
+          "name": "Get All Employees",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/employees",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Employees list retrieved from PostgreSQL', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create / Onboard Employee",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"EMP-POSTMAN-{{$randomInt}}\",\n  \"code\": \"PM-{{$randomInt}}\",\n  \"name\": \"Postman Test Engineer\",\n  \"email\": \"postman.tester{{$randomInt}}@workpulse.com\",\n  \"phone\": \"9876543210\",\n  \"department\": \"Engineering\",\n  \"designation\": \"QA Lead\",\n  \"type\": \"field\",\n  \"status\": \"active\",\n  \"joiningDate\": \"2026-08-26\",\n  \"monthlyCtc\": 75000.0,\n  \"basicSalary\": 37500.0,\n  \"hra\": 18750.0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/employees",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.environment.set('employeeDatabaseId', json.data.id);",
+                  "    pm.environment.set('employeeId', json.data.id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Employee By ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeDatabaseId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees", "{{employeeDatabaseId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Employee details returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update Employee",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"{{employeeDatabaseId}}\",\n  \"code\": \"PM-U-{{$randomInt}}\",\n  \"name\": \"Postman Lead Engineer\",\n  \"email\": \"postman.tester{{$randomInt}}@workpulse.com\",\n  \"department\": \"Architecture\",\n  \"designation\": \"Principal Architect\",\n  \"type\": \"office\",\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeDatabaseId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees", "{{employeeDatabaseId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Employee updated successfully', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Toggle Employee Status (Active/Inactive)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/employees/{{employeeDatabaseId}}/toggle-status",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees", "{{employeeDatabaseId}}", "toggle-status"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status toggled', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 - Sites",
+      "item": [
+        {
+          "name": "Get All Work Sites",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sites",
+              "host": ["{{baseUrl}}"],
+              "path": ["sites"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Sites list retrieved', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data.length).to.be.above(0);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Work Site",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"SITE-PM-{{$randomInt}}\",\n  \"code\": \"SPM-{{$randomInt}}\",\n  \"name\": \"Postman Tech Park OMR\",\n  \"client\": \"Postman Technologies\",\n  \"project\": \"Project Alpha QA\",\n  \"address\": \"OMR IT Corridor, Chennai\",\n  \"latitude\": 12.9010000,\n  \"longitude\": 80.2279000,\n  \"geofenceRadius\": 350.0,\n  \"poNumber\": \"PO-2026-PM-01\",\n  \"siteManagerName\": \"Tech Lead\",\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sites",
+              "host": ["{{baseUrl}}"],
+              "path": ["sites"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.environment.set('siteId', json.data.id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Site By ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/sites/{{siteId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sites", "{{siteId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Site details returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 - Site Mapping",
+      "item": [
+        {
+          "name": "Save Employee Site Mappings",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employeeId\": \"{{employeeId}}\",\n  \"siteIds\": [\"{{siteId}}\", \"SITE-001\"],\n  \"fromDate\": \"2026-01-01\",\n  \"toDate\": null,\n  \"actorName\": \"HR Manager\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/mappings",
+              "host": ["{{baseUrl}}"],
+              "path": ["mappings"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Active Sites for Employee",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/mappings/employee/{{employeeId}}/active-sites",
+              "host": ["{{baseUrl}}"],
+              "path": ["mappings", "employee", "{{employeeId}}", "active-sites"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Active sites returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 - Attendance & GPS Punches",
+      "item": [
+        {
+          "name": "Mobile GPS Punch IN (Inside Geofence)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employeeId\": \"{{employeeId}}\",\n  \"type\": \"inPunch\",\n  \"source\": \"mobile\",\n  \"siteId\": \"SITE-001\",\n  \"siteName\": \"CTS Chennai Campus\",\n  \"latitude\": 12.9010000,\n  \"longitude\": 80.2279000,\n  \"accuracy\": 5.0,\n  \"distanceMeters\": 0.0,\n  \"isVerified\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/punches/mobile",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "punches", "mobile"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.eql(true);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mobile GPS Punch OUT",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employeeId\": \"{{employeeId}}\",\n  \"type\": \"outPunch\",\n  \"source\": \"mobile\",\n  \"siteId\": \"SITE-001\",\n  \"siteName\": \"CTS Chennai Campus\",\n  \"latitude\": 12.9010000,\n  \"longitude\": 80.2279000,\n  \"accuracy\": 5.0,\n  \"distanceMeters\": 0.0,\n  \"isVerified\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/attendance/punches/mobile",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "punches", "mobile"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Daily Attendance List",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/attendance/daily",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "daily"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Daily attendance records returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Employee Daily Attendance",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/attendance/daily/employee/{{employeeId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["attendance", "daily", "employee", "{{employeeId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Employee daily attendance returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 - Face Registration",
+      "item": [
+        {
+          "name": "Get Face Registration Status",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/face/status/{{employeeId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["face", "status", "{{employeeId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Face registration status is returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 - Excel Batch Import",
+      "item": [
+        {
+          "name": "Batch Import Employees (JSON Payloads)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"addAndUpdate\",\n  \"employees\": [\n    {\n      \"id\": \"EMP-EXCEL-01\",\n      \"code\": \"EX001\",\n      \"name\": \"Ramesh Kumar\",\n      \"email\": \"ramesh.k@workpulse.com\",\n      \"phone\": \"9876500001\",\n      \"department\": \"Civil\",\n      \"designation\": \"Site Engineer\",\n      \"type\": \"field\",\n      \"status\": \"active\"\n    },\n    {\n      \"id\": \"EMP-EXCEL-02\",\n      \"code\": \"EX002\",\n      \"name\": \"Suresh V.\",\n      \"email\": \"suresh.v@workpulse.com\",\n      \"phone\": \"9876500002\",\n      \"department\": \"Electrical\",\n      \"designation\": \"Safety Supervisor\",\n      \"type\": \"field\",\n      \"status\": \"active\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/employees/import",
+              "host": ["{{baseUrl}}"],
+              "path": ["employees", "import"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data.length).to.be.at.least(2);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "09 - Regularization & Corrections",
+      "item": [
+        {
+          "name": "Submit Regularization Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employeeId\": \"{{employeeId}}\",\n  \"employeeName\": \"Postman Test Engineer\",\n  \"employeeCode\": \"EMP001\",\n  \"department\": \"Engineering\",\n  \"attendanceDate\": \"2026-08-26\",\n  \"requestType\": \"missedPunchIn\",\n  \"reasonCategory\": \"clientMeeting\",\n  \"requestedInTime\": \"09:00 AM\",\n  \"remarks\": \"Client discussion at OMR campus\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/regularization",
+              "host": ["{{baseUrl}}"],
+              "path": ["regularization"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get All Regularization Requests",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/regularization",
+              "host": ["{{baseUrl}}"],
+              "path": ["regularization"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Regularization list returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10 - Payroll Calculations",
+      "item": [
+        {
+          "name": "Calculate Monthly Payroll",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payroll/calculate?month=2026-08-01",
+              "host": ["{{baseUrl}}"],
+              "path": ["payroll", "calculate"],
+              "query": [
+                { "key": "month", "value": "2026-08-01" }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Successful POST request', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Payroll Records for Month",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/payroll?month=2026-08-01",
+              "host": ["{{baseUrl}}"],
+              "path": ["payroll"],
+              "query": [
+                { "key": "month", "value": "2026-08-01" }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Payroll records list returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11 - Audit Trail",
+      "item": [
+        {
+          "name": "Get System Audit Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/audit-logs",
+              "host": ["{{baseUrl}}"],
+              "path": ["audit-logs"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Audit trail logs retrieved from PostgreSQL', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.data.length).to.be.at.least(1);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "12 - Notifications",
+      "item": [
+        {
+          "name": "Get All Notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/notifications",
+              "host": ["{{baseUrl}}"],
+              "path": ["notifications"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Notifications returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Notification as Read",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/notifications/{{notificationId}}/read",
+              "host": ["{{baseUrl}}"],
+              "path": ["notifications", "{{notificationId}}", "read"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Notification marked as read', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "13 - System Settings",
+      "item": [
+        {
+          "name": "Get System Settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/settings",
+              "host": ["{{baseUrl}}"],
+              "path": ["settings"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Settings returned', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update System Settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyName\": \"WorkPulse Global Enterprise\",\n  \"officeStartTime\": \"09:00 AM\",\n  \"officeEndTime\": \"06:00 PM\",\n  \"lateGraceMinutes\": 30,\n  \"halfDayThresholdHours\": 4,\n  \"defaultGeofenceRadiusMeters\": 200.0,\n  \"enableAutoPayroll\": true,\n  \"enableBiometricSync\": true,\n  \"allowOfflinePunches\": true,\n  \"maxGpsAccuracyThresholdMeters\": 50.0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/settings",
+              "host": ["{{baseUrl}}"],
+              "path": ["settings"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Settings updated in PostgreSQL', function () {",
+                  "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
