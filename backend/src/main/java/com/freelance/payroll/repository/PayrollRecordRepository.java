@@ -12,4 +12,6 @@ public interface PayrollRecordRepository extends JpaRepository<PayrollRecordEnti
     List<PayrollRecordEntity> findByMonthOrderByEmployeeIdAsc(LocalDate month);
     List<PayrollRecordEntity> findByEmployeeIdOrderByMonthDesc(String employeeId);
     Optional<PayrollRecordEntity> findByEmployeeIdAndMonth(String employeeId, LocalDate month);
+    List<PayrollRecordEntity> findByPayrollMonthAndPayrollYearOrderByEmployeeIdAsc(Integer month, Integer year);
+    Optional<PayrollRecordEntity> findByEmployeeIdAndPayrollMonthAndPayrollYear(String employeeId, Integer month, Integer year);
 }

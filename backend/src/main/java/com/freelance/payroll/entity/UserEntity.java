@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import java.time.LocalDateTime;
 
 @Entity
 @Table(name = "users")
@@ -17,6 +18,8 @@ public class UserEntity {
     @Id
     private String id;
 
+    private String username;
+
     @Column(nullable = false, unique = true)
     private String email;
 
@@ -27,41 +30,34 @@ public class UserEntity {
     private String name;
 
     @Column(nullable = false)
-    private String role; // admin, hr, fieldStaff
+    private String role; // ADMIN, HR, FIELD_STAFF
+
+    @Builder.Default
+    @Column(nullable = false)
+    private Boolean active = true;
 
     private String employeeId;
     private String department;
     private String avatarUrl;
     private String token;
     private String googleSubjectId;
+    
+    @Builder.Default
+    private String authProvider = "LOCAL";
 
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 
-    public String getEmail() { return email; }
-    public void setEmail(String email) { this.email = email; }
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) createdAt = LocalDateTime.now();
+        if (updatedAt == null) updatedAt = LocalDateTime.now();
+        if (active == null) active = true;
+        if (username == null || username.isBlank()) username = email;
+    }
 
-    public String getPassword() { return password; }
-    public void setPassword(String password) { this.password = password; }
-
-    public String getName() { return name; }
-    public void setName(String name) { this.name = name; }
-
-    public String getRole() { return role; }
-    public void setRole(String role) { this.role = role; }
-
-    public String getEmployeeId() { return employeeId; }
-    public void setEmployeeId(String employeeId) { this.employeeId = employeeId; }
-
-    public String getDepartment() { return department; }
-    public void setDepartment(String department) { this.department = department; }
-
-    public String getAvatarUrl() { return avatarUrl; }
-    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
-
-    public String getToken() { return token; }
-    public void setToken(String token) { this.token = token; }
-
-    public String getGoogleSubjectId() { return googleSubjectId; }
-    public void setGoogleSubjectId(String googleSubjectId) { this.googleSubjectId = googleSubjectId; }
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
 }

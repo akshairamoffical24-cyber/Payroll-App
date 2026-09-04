@@ -10,6 +10,6 @@ Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$ro
 Write-Host "[2/2] Starting Flutter App (Chrome / Port 7357)..." -ForegroundColor Green
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$root\flutter_application_1'; flutter run -d chrome --web-port=7357"
 
-Write-Host "`n✓ Both services launched in separate windows!" -ForegroundColor Green
+Write-Host "`nServices launching in separate windows:" -ForegroundColor Green
 Write-Host "- Backend: http://localhost:8080"
 Write-Host "- Flutter: http://localhost:7357"

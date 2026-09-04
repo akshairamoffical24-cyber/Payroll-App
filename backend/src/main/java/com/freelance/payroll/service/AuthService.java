@@ -6,28 +6,37 @@ import com.freelance.payroll.dto.LoginRequest;
 import com.freelance.payroll.entity.AuditLogEntity;
 import com.freelance.payroll.entity.EmployeeEntity;
 import com.freelance.payroll.entity.UserEntity;
+import com.freelance.payroll.exception.ForbiddenException;
+import com.freelance.payroll.exception.UnauthorizedException;
 import com.freelance.payroll.repository.AuditLogRepository;
 import com.freelance.payroll.repository.EmployeeRepository;
 import com.freelance.payroll.repository.UserRepository;
+import com.freelance.payroll.security.JwtService;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.UUID;
 
+@Slf4j
 @Service
 public class AuthService {
 
     private final UserRepository userRepository;
     private final EmployeeRepository employeeRepository;
     private final AuditLogRepository auditLogRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtService jwtService;
 
     @Value("${google.oauth.client-id:}")
     private String googleClientId;
@@ -39,208 +48,104 @@ public class AuthService {
     public AuthService(
             UserRepository userRepository,
             EmployeeRepository employeeRepository,
-            AuditLogRepository auditLogRepository) {
+            AuditLogRepository auditLogRepository,
+            PasswordEncoder passwordEncoder,
+            JwtService jwtService) {
         this.userRepository = userRepository;
         this.employeeRepository = employeeRepository;
         this.auditLogRepository = auditLogRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.jwtService = jwtService;
     }
 
+    @Transactional
     public AuthResponse login(LoginRequest request) {
-        String input = request.getEmailOrId() != null ? request.getEmailOrId().trim() : "";
-        String password = request.getPassword() != null ? request.getPassword().trim() : "";
-        
-        // 1. Check direct match in users table by work email
-        Optional<UserEntity> userOpt = userRepository.findByEmailIgnoreCase(input);
+        String input = request.getEffectiveUsername();
+        String rawPassword = request.getPassword() != null ? request.getPassword().trim() : "";
 
-        // 2. Check employees table by work email, code, ID, or phone
-        Optional<EmployeeEntity> empOpt = employeeRepository.findByEmailIgnoreCase(input);
-        if (empOpt.isEmpty()) {
-            empOpt = employeeRepository.findByCodeIgnoreCase(input);
-        }
-        if (empOpt.isEmpty()) {
-            empOpt = employeeRepository.findById(input);
-        }
-        if (empOpt.isEmpty()) {
-            empOpt = employeeRepository.findAll().stream()
-                    .filter(e -> (e.getPhone() != null && e.getPhone().equalsIgnoreCase(input))
-                            || (e.getCode() != null && e.getCode().equalsIgnoreCase(input.replaceAll("-", "").replaceAll(" ", "")))
-                            || (e.getId() != null && e.getId().equalsIgnoreCase(input.replaceAll("-", "").replaceAll(" ", ""))))
-                    .findFirst();
+        if (input.isEmpty() || rawPassword.isEmpty()) {
+            throw new IllegalArgumentException("Username/email and password are required.");
         }
 
-        if (empOpt.isPresent()) {
-            EmployeeEntity emp = empOpt.get();
-            if (userOpt.isEmpty()) {
-                userOpt = userRepository.findByEmployeeId(emp.getId());
-            }
-            if (userOpt.isEmpty() && emp.getEmail() != null && !emp.getEmail().isEmpty()) {
-                userOpt = userRepository.findByEmailIgnoreCase(emp.getEmail());
-            }
-
-            // Auto-provision user account if not yet created
-            if (userOpt.isEmpty()) {
-                String role = "field".equalsIgnoreCase(emp.getType()) ? "fieldStaff" : "hr";
-                UserEntity newUser = new UserEntity();
-                newUser.setId("USER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-                newUser.setEmail(emp.getEmail() != null && !emp.getEmail().isEmpty() ? emp.getEmail().toLowerCase().trim() : input.toLowerCase());
-                newUser.setPassword("field123");
-                newUser.setName(emp.getName());
-                newUser.setRole(role);
-                newUser.setEmployeeId(emp.getId());
-                newUser.setDepartment(emp.getDepartment());
-                newUser.setAvatarUrl(emp.getAvatarUrl());
-                userOpt = Optional.of(userRepository.save(newUser));
-            } else {
-                // Ensure employeeId is linked
-                UserEntity existingUser = userOpt.get();
-                if (existingUser.getEmployeeId() == null || existingUser.getEmployeeId().isEmpty()) {
-                    existingUser.setEmployeeId(emp.getId());
-                    if (existingUser.getDepartment() == null) existingUser.setDepartment(emp.getDepartment());
-                    userRepository.save(existingUser);
-                }
-            }
-        }
-
-        if (userOpt.isPresent()) {
-            UserEntity user = userOpt.get();
-
-            // Auto-link employeeId if still missing
-            if (user.getEmployeeId() == null || user.getEmployeeId().isEmpty()) {
-                employeeRepository.findByEmailIgnoreCase(user.getEmail()).ifPresent(emp -> {
-                    user.setEmployeeId(emp.getId());
-                    if (user.getDepartment() == null) user.setDepartment(emp.getDepartment());
-                    userRepository.save(user);
-                });
-            }
-
-            // Validate password with support for default employee passwords and direct match
-            if (user.getPassword() != null && !user.getPassword().isEmpty() && !password.isEmpty()) {
-                boolean matches = user.getPassword().equals(password)
-                        || "admin123".equals(password)
-                        || "hr123".equals(password)
-                        || "field123".equals(password)
-                        || "emp123".equals(password)
-                        || "password".equals(password)
-                        || "123456".equals(password)
-                        || "changeme2026!".equals(password)
-                        || (empOpt.isPresent() && (password.equals(empOpt.get().getCode()) || password.equals(empOpt.get().getPhone())));
-                if (!matches) {
-                    logAudit("LOGIN_FAILED", user.getName(), user.getRole(), "Failed login attempt for " + user.getEmail(), user.getId());
-                    throw new IllegalArgumentException("Invalid password. Please check your credentials.");
-                }
-            }
-
-            String token = "JWT-" + UUID.randomUUID().toString();
-            user.setToken(token);
-            userRepository.save(user);
-
-            logAudit("LOGIN_SUCCESS", user.getName(), user.getRole(), "User logged in with ID (" + input + " / " + user.getEmail() + ")", user.getId());
-
-            return AuthResponse.builder()
-                    .id(user.getId())
-                    .email(user.getEmail())
-                    .name(user.getName())
-                    .role(user.getRole())
-                    .employeeId(user.getEmployeeId())
-                    .department(user.getDepartment())
-                    .avatarUrl(user.getAvatarUrl())
-                    .token(token)
-                    .build();
-        }
-
-        throw new IllegalArgumentException("Invalid credentials. Please check your Work Email ID and password.");
-    }
-
-    public AuthResponse signInWithGoogle(GoogleAuthRequest request) {
-        String verifiedEmail = request.getEmail() != null ? request.getEmail().trim().toLowerCase() : "";
-        String verifiedName = request.getName();
-        String verifiedAvatarUrl = request.getAvatarUrl();
-        String verifiedSubjectId = request.getGoogleSubjectId();
-
-        // 1. Verify Real Google ID Token cryptographically if provided and is a JWT format
-        String idTokenString = request.getIdToken();
-        if (idTokenString != null && idTokenString.startsWith("ey") && idTokenString.contains(".")) {
-            try {
-                GoogleIdTokenVerifier.Builder verifierBuilder = new GoogleIdTokenVerifier.Builder(
-                        GoogleNetHttpTransport.newTrustedTransport(),
-                        GsonFactory.getDefaultInstance());
-
-                if (googleClientId != null && !googleClientId.isEmpty() && !googleClientId.contains("default")) {
-                    verifierBuilder.setAudience(Collections.singletonList(googleClientId));
-                }
-
-                GoogleIdTokenVerifier verifier = verifierBuilder.build();
-                GoogleIdToken idToken = verifier.verify(idTokenString);
-
-                if (idToken != null) {
-                    GoogleIdToken.Payload payload = idToken.getPayload();
-                    verifiedEmail = payload.getEmail().toLowerCase().trim();
-                    verifiedName = (String) payload.get("name");
-                    verifiedAvatarUrl = (String) payload.get("picture");
-                    verifiedSubjectId = payload.getSubject();
-                } else if (verifyToken && googleClientId != null && !googleClientId.contains("default")) {
-                    throw new SecurityException("Google ID Token verification failed or token expired.");
-                }
-            } catch (SecurityException se) {
-                throw se;
-            } catch (Exception e) {
-                // If network/transport error occurs in token verification, fall back to email if verification is non-strict
-                if (verifyToken && googleClientId != null && !googleClientId.contains("default")) {
-                    throw new SecurityException("Unable to verify Google credentials: " + e.getMessage());
-                }
-            }
-        }
-
-        if (verifiedEmail.isEmpty()) {
-            throw new IllegalArgumentException("Google authentication did not provide a valid email address.");
-        }
-
-        // 2. Lookup authorized user in database
-        Optional<UserEntity> userOpt = userRepository.findByEmailIgnoreCase(verifiedEmail);
-
-        // 3. If not found in users, check if registered in employees table
+        // 1. Check direct match in users table by username or email
+        Optional<UserEntity> userOpt = userRepository.findByUsernameIgnoreCase(input);
         if (userOpt.isEmpty()) {
-            Optional<EmployeeEntity> empOpt = employeeRepository.findByEmailIgnoreCase(verifiedEmail);
+            userOpt = userRepository.findByEmailIgnoreCase(input);
+        }
+
+        // 2. Check employees table by email, code, or phone
+        if (userOpt.isEmpty()) {
+            Optional<EmployeeEntity> empOpt = employeeRepository.findByEmailIgnoreCase(input);
+            if (empOpt.isEmpty()) {
+                empOpt = employeeRepository.findByCodeIgnoreCase(input);
+            }
+            if (empOpt.isEmpty()) {
+                empOpt = employeeRepository.findById(input);
+            }
+
             if (empOpt.isPresent()) {
                 EmployeeEntity emp = empOpt.get();
-                String role = "field".equalsIgnoreCase(emp.getType()) ? "fieldStaff" : "hr";
-                UserEntity newUser = new UserEntity();
-                newUser.setId("USER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-                newUser.setEmail(emp.getEmail().toLowerCase().trim());
-                newUser.setPassword("GOOGLE_OAUTH_" + UUID.randomUUID().toString().substring(0, 8));
-                newUser.setName(verifiedName != null && !verifiedName.isEmpty() ? verifiedName : emp.getName());
-                newUser.setRole(role);
-                newUser.setEmployeeId(emp.getId());
-                newUser.setDepartment(emp.getDepartment());
-                newUser.setAvatarUrl(verifiedAvatarUrl != null ? verifiedAvatarUrl : emp.getAvatarUrl());
-                newUser.setGoogleSubjectId(verifiedSubjectId);
-                userOpt = Optional.of(userRepository.save(newUser));
+                userOpt = userRepository.findByEmployeeId(emp.getId());
+                if (userOpt.isEmpty() && emp.getEmail() != null && !emp.getEmail().isBlank()) {
+                    userOpt = userRepository.findByEmailIgnoreCase(emp.getEmail());
+                }
+
+                // Auto-provision user account if needed
+                if (userOpt.isEmpty()) {
+                    String role = "field".equalsIgnoreCase(emp.getType()) ? "FIELD_STAFF" : "HR";
+                    UserEntity newUser = UserEntity.builder()
+                            .id("USER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
+                            .username(emp.getCode() != null ? emp.getCode() : emp.getEmail())
+                            .email(emp.getEmail() != null && !emp.getEmail().isBlank() ? emp.getEmail().toLowerCase().trim() : input.toLowerCase())
+                            .password(passwordEncoder.encode(rawPassword))
+                            .name(emp.getName())
+                            .role(role)
+                            .employeeId(emp.getId())
+                            .department(emp.getDepartment())
+                            .avatarUrl(emp.getAvatarUrl())
+                            .active(true)
+                            .build();
+                    userOpt = Optional.of(userRepository.save(newUser));
+                }
             }
         }
 
-        // 4. Reject unauthorized Google accounts
         if (userOpt.isEmpty()) {
-            logAudit("GOOGLE_LOGIN_UNAUTHORIZED", verifiedName != null ? verifiedName : verifiedEmail, "UNKNOWN",
-                    "Unauthorized Google Sign-In attempt with email: " + verifiedEmail, verifiedEmail);
-            throw new SecurityException("Your Google account (" + verifiedEmail + ") is not authorized to access this system. Please contact the administrator.");
+            throw new IllegalArgumentException("Invalid credentials. Account not found.");
         }
 
         UserEntity user = userOpt.get();
-        String token = "JWT-GOOGLE-" + UUID.randomUUID().toString();
+        if (Boolean.FALSE.equals(user.getActive())) {
+            recordAuditLog("ACCOUNT_DISABLED_LOGIN_ATTEMPT", user.getName(), user.getRole(), "Disabled user attempted password login: " + input);
+            throw new ForbiddenException("User account is inactive. Please contact your administrator.");
+        }
+
+        // Password verification (support BCrypt, fallback to plaintext upgrade if legacy)
+        boolean passwordMatches = passwordEncoder.matches(rawPassword, user.getPassword());
+        if (!passwordMatches && user.getPassword().equals(rawPassword)) {
+            // Upgrade legacy plaintext password to BCrypt hash
+            user.setPassword(passwordEncoder.encode(rawPassword));
+            userRepository.save(user);
+            passwordMatches = true;
+        }
+
+        if (!passwordMatches) {
+            throw new IllegalArgumentException("Invalid credentials. Incorrect password.");
+        }
+
+        // Generate JWT tokens
+        String token = jwtService.generateToken(user.getEmail(), user.getRole(), user.getName(), user.getEmployeeId());
+        String refreshToken = jwtService.generateRefreshToken(user.getEmail());
+
         user.setToken(token);
-        if (verifiedSubjectId != null) {
-            user.setGoogleSubjectId(verifiedSubjectId);
-        }
-        if (verifiedAvatarUrl != null && (user.getAvatarUrl() == null || user.getAvatarUrl().isEmpty())) {
-            user.setAvatarUrl(verifiedAvatarUrl);
-        }
         userRepository.save(user);
 
-        logAudit("GOOGLE_LOGIN_SUCCESS", user.getName(), user.getRole(),
-                "User signed in with verified Google Account (" + user.getEmail() + ")", user.getId());
+        // Audit Log
+        recordAuditLog("LOGIN", user.getName(), user.getRole(), "User logged in successfully via username/email: " + input);
 
         return AuthResponse.builder()
                 .id(user.getId())
+                .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
                 .email(user.getEmail())
                 .name(user.getName())
                 .role(user.getRole())
@@ -248,37 +153,241 @@ public class AuthService {
                 .department(user.getDepartment())
                 .avatarUrl(user.getAvatarUrl())
                 .token(token)
+                .refreshToken(refreshToken)
+                .build();
+    }
+
+    @Transactional
+    public AuthResponse refreshToken(String refreshToken) {
+        if (refreshToken == null || !jwtService.validateToken(refreshToken)) {
+            throw new IllegalArgumentException("Invalid or expired refresh token.");
+        }
+
+        String username = jwtService.extractUsername(refreshToken);
+        Optional<UserEntity> userOpt = userRepository.findByEmailIgnoreCase(username);
+        if (userOpt.isEmpty()) {
+            userOpt = userRepository.findByUsernameIgnoreCase(username);
+        }
+
+        UserEntity user = userOpt.orElseThrow(() -> new IllegalArgumentException("User not found for refresh token."));
+
+        String newToken = jwtService.generateToken(user.getEmail(), user.getRole(), user.getName(), user.getEmployeeId());
+        user.setToken(newToken);
+        userRepository.save(user);
+
+        return AuthResponse.builder()
+                .id(user.getId())
+                .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
+                .email(user.getEmail())
+                .name(user.getName())
+                .role(user.getRole())
+                .employeeId(user.getEmployeeId())
+                .department(user.getDepartment())
+                .avatarUrl(user.getAvatarUrl())
+                .token(newToken)
+                .refreshToken(refreshToken)
+                .build();
+    }
+
+    @Transactional
+    public void logout(String token) {
+        if (token != null) {
+            try {
+                String username = jwtService.extractUsername(token);
+                userRepository.findByEmailIgnoreCase(username).ifPresent(user -> {
+                    user.setToken(null);
+                    userRepository.save(user);
+                });
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Transactional
+    public AuthResponse signInWithGoogle(GoogleAuthRequest request) {
+        String tokenStr = request != null ? request.getEffectiveToken() : null;
+        if (tokenStr == null || tokenStr.trim().isEmpty()) {
+            throw new UnauthorizedException("Google ID Token is required");
+        }
+
+        String email = null;
+        String name = null;
+        String googleSubjectId = null;
+        String avatarUrl = null;
+
+        if (verifyToken) {
+            try {
+                GoogleIdTokenVerifier.Builder verifierBuilder = new GoogleIdTokenVerifier.Builder(
+                        GoogleNetHttpTransport.newTrustedTransport(),
+                        GsonFactory.getDefaultInstance()
+                );
+
+                if (googleClientId != null && !googleClientId.isBlank()) {
+                    verifierBuilder.setAudience(Collections.singletonList(googleClientId.trim()));
+                }
+
+                GoogleIdTokenVerifier verifier = verifierBuilder.build();
+                GoogleIdToken idToken = verifier.verify(tokenStr);
+
+                if (idToken == null) {
+                    log.warn("Google ID token verification failed. Signature, expiration or audience mismatch.");
+                    recordAuditLog("GOOGLE_LOGIN_FAILED", "UNKNOWN", "ANONYMOUS", "Google token verification failed for token");
+                    throw new UnauthorizedException("Google authentication failed: Invalid or expired Google ID token.");
+                }
+
+                GoogleIdToken.Payload payload = idToken.getPayload();
+                googleSubjectId = payload.getSubject();
+                email = payload.getEmail();
+                Boolean emailVerified = payload.getEmailVerified();
+                name = (String) payload.get("name");
+                avatarUrl = (String) payload.get("picture");
+
+                if (email == null || email.trim().isEmpty()) {
+                    throw new UnauthorizedException("Google authentication failed: Email claim missing from ID token.");
+                }
+
+                if (Boolean.FALSE.equals(emailVerified)) {
+                    throw new UnauthorizedException("Google authentication failed: Google account email is not verified.");
+                }
+            } catch (UnauthorizedException ue) {
+                throw ue;
+            } catch (Exception e) {
+                log.error("Exception during Google ID token verification: {}", e.getMessage(), e);
+                recordAuditLog("GOOGLE_LOGIN_FAILED", "UNKNOWN", "ANONYMOUS", "Error during Google token verification: " + e.getMessage());
+                throw new UnauthorizedException("Google authentication error: " + e.getMessage());
+            }
+        } else {
+            email = request.getEmail();
+            name = request.getName();
+            googleSubjectId = request.getGoogleId();
+            avatarUrl = request.getPhotoUrl();
+        }
+
+        if (email == null || email.trim().isEmpty()) {
+            throw new UnauthorizedException("Email could not be determined from Google Sign-In");
+        }
+
+        String finalEmail = email.trim().toLowerCase();
+
+        // 1. Query PostgreSQL for user by Google Subject ID or email
+        Optional<UserEntity> userOpt = Optional.empty();
+        if (googleSubjectId != null && !googleSubjectId.isBlank()) {
+            userOpt = userRepository.findByGoogleSubjectId(googleSubjectId);
+        }
+        if (userOpt.isEmpty()) {
+            userOpt = userRepository.findByEmailIgnoreCase(finalEmail);
+        }
+
+        UserEntity user;
+        if (userOpt.isPresent()) {
+            user = userOpt.get();
+            if (Boolean.FALSE.equals(user.getActive())) {
+                recordAuditLog("ACCOUNT_DISABLED_LOGIN_ATTEMPT", user.getName(), user.getRole(), "Disabled user attempted Google login: " + finalEmail);
+                throw new ForbiddenException("Your account has been disabled. Please contact the administrator.");
+            }
+            if (user.getGoogleSubjectId() == null && googleSubjectId != null) {
+                user.setGoogleSubjectId(googleSubjectId);
+            }
+            if ((user.getAvatarUrl() == null || user.getAvatarUrl().isBlank()) && avatarUrl != null) {
+                user.setAvatarUrl(avatarUrl);
+            }
+            if (user.getAuthProvider() == null || user.getAuthProvider().isBlank()) {
+                user.setAuthProvider("GOOGLE");
+            }
+        } else {
+            // 2. Check employees table for pre-registered employee profile
+            Optional<EmployeeEntity> empOpt = employeeRepository.findByEmailIgnoreCase(finalEmail);
+            if (empOpt.isPresent()) {
+                EmployeeEntity emp = empOpt.get();
+                if ("inactive".equalsIgnoreCase(emp.getStatus())) {
+                    recordAuditLog("ACCOUNT_DISABLED_LOGIN_ATTEMPT", emp.getName(), "EMPLOYEE", "Inactive employee attempted Google login: " + finalEmail);
+                    throw new ForbiddenException("Your employee account is inactive. Please contact HR administration.");
+                }
+
+                String role = "field".equalsIgnoreCase(emp.getType()) ? "FIELD_STAFF" : "HR";
+                user = UserEntity.builder()
+                        .id("USER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
+                        .username(emp.getCode() != null ? emp.getCode() : finalEmail)
+                        .email(finalEmail)
+                        .name(emp.getName() != null ? emp.getName() : (name != null ? name : "Google User"))
+                        .password(passwordEncoder.encode(UUID.randomUUID().toString()))
+                        .role(role)
+                        .employeeId(emp.getId())
+                        .department(emp.getDepartment())
+                        .avatarUrl(avatarUrl != null ? avatarUrl : emp.getAvatarUrl())
+                        .googleSubjectId(googleSubjectId)
+                        .authProvider("GOOGLE")
+                        .active(true)
+                        .build();
+                user = userRepository.save(user);
+            } else {
+                // Reject unregistered Google accounts
+                recordAuditLog("GOOGLE_ACCOUNT_NOT_REGISTERED", name != null ? name : "Unknown", "GUEST", "Unregistered Google account attempted login: " + finalEmail);
+                throw new ForbiddenException("Your Google account (" + finalEmail + ") is not registered. Please contact the administrator to set up your account.");
+            }
+        }
+
+        // Generate application JWT and refresh token
+        String token = jwtService.generateToken(user.getEmail(), user.getRole(), user.getName(), user.getEmployeeId());
+        String refreshToken = jwtService.generateRefreshToken(user.getEmail());
+        user.setToken(token);
+        userRepository.save(user);
+
+        // Audit Log
+        recordAuditLog("GOOGLE_LOGIN_SUCCESS", user.getName(), user.getRole(), "User logged in successfully via Google Sign-In: " + finalEmail);
+
+        return AuthResponse.builder()
+                .id(user.getId())
+                .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
+                .email(user.getEmail())
+                .name(user.getName())
+                .role(user.getRole())
+                .employeeId(user.getEmployeeId())
+                .department(user.getDepartment())
+                .avatarUrl(user.getAvatarUrl())
+                .token(token)
+                .refreshToken(refreshToken)
                 .build();
     }
 
     public Optional<AuthResponse> getCurrentUser(String token) {
-        return userRepository.findAll().stream()
-                .filter(u -> token != null && token.equals(u.getToken()))
-                .findFirst()
-                .map(u -> AuthResponse.builder()
-                        .id(u.getId())
-                        .email(u.getEmail())
-                        .name(u.getName())
-                        .role(u.getRole())
-                        .employeeId(u.getEmployeeId())
-                        .department(u.getDepartment())
-                        .avatarUrl(u.getAvatarUrl())
-                        .token(u.getToken())
-                        .build());
+        if (token == null || !jwtService.validateToken(token)) {
+            return Optional.empty();
+        }
+        try {
+            String username = jwtService.extractUsername(token);
+            Optional<UserEntity> userOpt = userRepository.findByEmailIgnoreCase(username);
+            if (userOpt.isEmpty()) {
+                userOpt = userRepository.findByUsernameIgnoreCase(username);
+            }
+            return userOpt.map(u -> AuthResponse.builder()
+                    .id(u.getId())
+                    .username(u.getUsername())
+                    .email(u.getEmail())
+                    .name(u.getName())
+                    .role(u.getRole())
+                    .employeeId(u.getEmployeeId())
+                    .department(u.getDepartment())
+                    .avatarUrl(u.getAvatarUrl())
+                    .token(token)
+                    .build());
+        } catch (Exception e) {
+            return Optional.empty();
+        }
     }
 
-    private void logAudit(String action, String actorName, String actorRole, String details, String targetEntity) {
+    private void recordAuditLog(String action, String actorName, String actorRole, String details) {
         try {
-            AuditLogEntity audit = new AuditLogEntity();
-            audit.setId("AUDIT-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-            audit.setAction(action);
-            audit.setActorName(actorName != null ? actorName : "System");
-            audit.setActorRole(actorRole != null ? actorRole : "System");
-            audit.setDetails(details);
-            audit.setTimestamp(LocalDateTime.now());
-            audit.setTargetEntity(targetEntity);
-            auditLogRepository.save(audit);
-        } catch (Exception ignored) {}
+            auditLogRepository.save(AuditLogEntity.builder()
+                    .id("AUD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
+                    .action(action)
+                    .actorName(actorName)
+                    .actorRole(actorRole)
+                    .targetEntity("USER")
+                    .details(details)
+                    .timestamp(LocalDateTime.now())
+                    .build());
+        } catch (Exception e) {
+            log.warn("Failed to write audit log: {}", e.getMessage());
+        }
     }
 }
-

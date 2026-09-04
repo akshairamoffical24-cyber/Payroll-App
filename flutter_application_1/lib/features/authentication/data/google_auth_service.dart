@@ -21,6 +21,7 @@ class GoogleAuthPayload {
 
   Map<String, dynamic> toJson() {
     return {
+      'credential': idToken,
       'idToken': idToken,
       'accessToken': accessToken,
       'email': email,
@@ -60,7 +61,7 @@ class GoogleAuthService {
       debugPrint('[GoogleAuthService] Successfully authenticated Google account: ${account.email}');
 
       return GoogleAuthPayload(
-        idToken: auth.idToken ?? 'GOOGLE_ID_TOKEN_${account.id}',
+        idToken: auth.idToken,
         accessToken: auth.accessToken,
         email: account.email,
         name: account.displayName ?? account.email.split('@').first,
@@ -114,4 +115,3 @@ class GoogleAuthService {
     }
   }
 }
-

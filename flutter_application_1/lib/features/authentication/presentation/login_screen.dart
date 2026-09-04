@@ -698,10 +698,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               child: _isGoogleLoading
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.primary),
+                  ? const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.primary),
+                        ),
+                        SizedBox(width: 10),
+                        Text(
+                          'Authenticating with Google...',
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     )
                   : Row(
                       mainAxisAlignment: MainAxisAlignment.center,

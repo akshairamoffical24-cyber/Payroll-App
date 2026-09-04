@@ -10,4 +10,5 @@ import java.util.Optional;
 public interface SiteRepository extends JpaRepository<SiteEntity, String> {
     Optional<SiteEntity> findByCodeIgnoreCase(String code);
     List<SiteEntity> findByStatusIgnoreCase(String status);
+    long countByStatusIgnoreCase(String status);
 }

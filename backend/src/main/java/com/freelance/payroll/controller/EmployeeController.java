@@ -4,9 +4,18 @@ import com.freelance.payroll.dto.ApiResponse;
 import com.freelance.payroll.entity.EmployeeEntity;
 import com.freelance.payroll.service.EmployeeService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/employees")
@@ -20,7 +29,14 @@ public class EmployeeController {
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<List<EmployeeEntity>>> getAllEmployees() {
+    public ResponseEntity<ApiResponse<Object>> getEmployees(
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size) {
+        if (page != null && size != null) {
+            Pageable pageable = PageRequest.of(page, size, Sort.by("name").ascending());
+            Page<EmployeeEntity> employeePage = employeeService.getEmployees(pageable);
+            return ResponseEntity.ok(ApiResponse.success(employeePage));
+        }
         return ResponseEntity.ok(ApiResponse.success(employeeService.getAllEmployees()));
     }
 
@@ -31,22 +47,46 @@ public class EmployeeController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/search")
+    public ResponseEntity<ApiResponse<List<EmployeeEntity>>> searchEmployees(
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String query) {
+        String searchTerm = name != null ? name : query;
+        List<EmployeeEntity> results = employeeService.searchEmployees(searchTerm);
+        return ResponseEntity.ok(ApiResponse.success(results));
+    }
+
+    @GetMapping("/department/{department}")
+    public ResponseEntity<ApiResponse<List<EmployeeEntity>>> getEmployeesByDepartment(@PathVariable String department) {
+        List<EmployeeEntity> results = employeeService.getEmployeesByDepartment(department);
+        return ResponseEntity.ok(ApiResponse.success(results));
+    }
+
     @PostMapping
     public ResponseEntity<ApiResponse<EmployeeEntity>> createEmployee(@RequestBody EmployeeEntity employee) {
         EmployeeEntity created = employeeService.createEmployee(employee);
         return ResponseEntity.ok(ApiResponse.success("Employee created successfully", created));
     }
 
-    @PostMapping("/import")
-    public ResponseEntity<ApiResponse<List<EmployeeEntity>>> importEmployees(@RequestBody com.freelance.payroll.dto.EmployeeImportRequest request) {
-        List<EmployeeEntity> imported = employeeService.importEmployees(request.getMode(), request.getEmployees());
-        return ResponseEntity.ok(ApiResponse.success("Employees imported successfully", imported));
-    }
-
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<EmployeeEntity>> updateEmployee(@PathVariable String id, @RequestBody EmployeeEntity employee) {
         EmployeeEntity updated = employeeService.updateEmployee(id, employee);
         return ResponseEntity.ok(ApiResponse.success("Employee updated successfully", updated));
+    }
+
+    @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<Map<String, Object>>> importEmployeesFromExcel(@RequestParam("file") MultipartFile file) {
+        Map<String, Object> result = employeeService.importEmployeesFromExcel(file);
+        return ResponseEntity.ok(ApiResponse.success("Excel processed successfully", result));
+    }
+
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportEmployeesToExcel() {
+        byte[] excelBytes = employeeService.exportEmployeesToExcel();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=employees.xlsx")
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .body(excelBytes);
     }
 
     @PatchMapping("/{id}/toggle-status")

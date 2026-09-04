@@ -12,7 +12,7 @@ class AuthConfig {
   /// (Configured with your Google Cloud Console Web Client ID)
   static const String googleWebClientId = String.fromEnvironment(
     'GOOGLE_CLIENT_ID',
-    defaultValue: '755414718888-jbm6o2po5vl0s8poq79gou8i1g0l4gpo.apps.googleusercontent.com',
+    defaultValue: '857844766578-p6p5m390fcm2jjjkorirebub1fq6jb96.apps.googleusercontent.com',
   );
 
   /// Optional: Server client ID for backend verification if required

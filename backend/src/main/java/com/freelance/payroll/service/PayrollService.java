@@ -1,15 +1,12 @@
 package com.freelance.payroll.service;
 
-import com.freelance.payroll.entity.DailyAttendanceEntity;
-import com.freelance.payroll.entity.EmployeeEntity;
+import com.freelance.payroll.entity.PayrollItemEntity;
 import com.freelance.payroll.entity.PayrollRecordEntity;
-import com.freelance.payroll.repository.DailyAttendanceRepository;
-import com.freelance.payroll.repository.EmployeeRepository;
+import com.freelance.payroll.repository.PayrollItemRepository;
 import com.freelance.payroll.repository.PayrollRecordRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,92 +14,52 @@ import java.util.Optional;
 public class PayrollService {
 
     private final PayrollRecordRepository payrollRepository;
-    private final DailyAttendanceRepository dailyRepository;
-    private final EmployeeRepository employeeRepository;
+    private final PayrollItemRepository payrollItemRepository;
+    private final PayrollCalculationService payrollCalculationService;
 
     @Autowired
     public PayrollService(
             PayrollRecordRepository payrollRepository,
-            DailyAttendanceRepository dailyRepository,
-            EmployeeRepository employeeRepository) {
+            PayrollItemRepository payrollItemRepository,
+            PayrollCalculationService payrollCalculationService) {
         this.payrollRepository = payrollRepository;
-        this.dailyRepository = dailyRepository;
-        this.employeeRepository = employeeRepository;
+        this.payrollItemRepository = payrollItemRepository;
+        this.payrollCalculationService = payrollCalculationService;
     }
 
-    public List<PayrollRecordEntity> getPayrollForMonth(LocalDate month) {
-        LocalDate startMonth = LocalDate.of(month.getYear(), month.getMonth(), 1);
-        List<PayrollRecordEntity> records = payrollRepository.findByMonthOrderByEmployeeIdAsc(startMonth);
+    public List<PayrollRecordEntity> getAllPayrollRecords() {
+        return payrollRepository.findAll();
+    }
+
+    public Optional<PayrollRecordEntity> getPayrollRecordById(String id) {
+        return payrollRepository.findById(id);
+    }
+
+    public List<PayrollRecordEntity> getPayrollRecordsForEmployee(String employeeId) {
+        return payrollRepository.findByEmployeeIdOrderByMonthDesc(employeeId);
+    }
+
+    public List<PayrollRecordEntity> getPayrollRecordsForMonth(int month, int year) {
+        LocalDate monthDate = LocalDate.of(year, month, 1);
+        List<PayrollRecordEntity> records = payrollRepository.findByPayrollMonthAndPayrollYearOrderByEmployeeIdAsc(month, year);
         if (records.isEmpty()) {
-            return calculateMonthlyPayroll(startMonth);
+            records = payrollRepository.findByMonthOrderByEmployeeIdAsc(monthDate);
         }
         return records;
     }
 
-    public List<PayrollRecordEntity> calculateMonthlyPayroll(LocalDate month) {
-        LocalDate startMonth = LocalDate.of(month.getYear(), month.getMonth(), 1);
-        LocalDate endMonth = startMonth.plusMonths(1).minusDays(1);
-        int totalDays = startMonth.lengthOfMonth();
+    public List<PayrollItemEntity> getPayrollItems(String payrollId) {
+        return payrollItemRepository.findByPayrollId(payrollId);
+    }
 
-        List<EmployeeEntity> employees = employeeRepository.findAll();
-        List<PayrollRecordEntity> records = new ArrayList<>();
-
-        for (EmployeeEntity emp : employees) {
-            List<DailyAttendanceEntity> dailyList = dailyRepository.findByEmployeeIdAndDateBetween(emp.getId(), startMonth, endMonth);
-
-            double presentDays = dailyList.stream()
-                    .filter(d -> "present".equalsIgnoreCase(d.getStatus()) || "late".equalsIgnoreCase(d.getStatus()) || "onDuty".equalsIgnoreCase(d.getStatus()))
-                    .mapToDouble(d -> d.getPayrollWorkingDaysCredit() != null ? d.getPayrollWorkingDaysCredit() : 1.0)
-                    .sum();
-
-            double halfDays = dailyList.stream().filter(d -> "halfDay".equalsIgnoreCase(d.getStatus())).count() * 0.5;
-            double weeklyOffs = 4.0;
-            double holidays = 1.0;
-            double paidLeaves = 1.0;
-            double payableDays = presentDays + halfDays + weeklyOffs + holidays + paidLeaves;
-            if (payableDays > totalDays) payableDays = totalDays;
-
-            double gross = emp.getMonthlyCtc() != null ? emp.getMonthlyCtc() : 35000.0;
-            double perDay = gross / totalDays;
-            double calculatedPayable = Math.round(perDay * payableDays);
-            double deductions = 200.0; // Professional tax
-            double net = calculatedPayable - deductions;
-
-            PayrollRecordEntity record = payrollRepository.findByEmployeeIdAndMonth(emp.getId(), startMonth)
-                    .orElse(PayrollRecordEntity.builder()
-                            .id("PAY-" + startMonth.getYear() + "-" + startMonth.getMonthValue() + "-" + emp.getId())
-                            .employeeId(emp.getId())
-                            .month(startMonth)
-                            .build());
-
-            record.setTotalDaysInMonth(totalDays);
-            record.setPayableDays(payableDays);
-            record.setPresentDays(presentDays);
-            record.setWeeklyOffs(weeklyOffs);
-            record.setHolidays(holidays);
-            record.setPaidLeaves(paidLeaves);
-            record.setAbsentDays((double) (totalDays - payableDays));
-            record.setHalfDays(halfDays);
-            record.setGrossMonthlyCtc(gross);
-            record.setPerDaySalary(perDay);
-            record.setCalculatedPayableSalary(calculatedPayable);
-            record.setDeductions(deductions);
-            record.setNetPayableSalary(net);
-            record.setStatus("calculated");
-
-            records.add(payrollRepository.save(record));
-        }
-
-        return records;
+    public List<PayrollRecordEntity> generatePayroll(int month, int year, String employeeId) {
+        return payrollCalculationService.generatePayroll(month, year, employeeId);
     }
 
     public PayrollRecordEntity updateStatus(String id, String status) {
-        Optional<PayrollRecordEntity> recordOpt = payrollRepository.findById(id);
-        if (recordOpt.isPresent()) {
-            PayrollRecordEntity record = recordOpt.get();
-            record.setStatus(status);
-            return payrollRepository.save(record);
-        }
-        return null;
+        PayrollRecordEntity record = payrollRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Payroll record not found"));
+        record.setStatus(status);
+        return payrollRepository.save(record);
     }
 }

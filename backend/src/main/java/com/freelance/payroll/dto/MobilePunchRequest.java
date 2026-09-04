@@ -14,6 +14,7 @@ public class MobilePunchRequest {
     private String employeeId;
     private String type; // inPunch, outPunch
     private String siteId;
+    private String siteName;
     private Double latitude;
     private Double longitude;
     private Double accuracy;

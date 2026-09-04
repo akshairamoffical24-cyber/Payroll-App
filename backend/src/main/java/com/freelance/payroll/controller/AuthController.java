@@ -10,6 +10,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
@@ -23,27 +25,28 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<ApiResponse<AuthResponse>> login(@RequestBody LoginRequest request) {
-        try {
-            AuthResponse response = authService.login(request);
-            return ResponseEntity.ok(ApiResponse.success("Login successful", response));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error(e.getMessage()));
-        }
+        AuthResponse response = authService.login(request);
+        return ResponseEntity.ok(ApiResponse.success("Login successful", response));
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<ApiResponse<AuthResponse>> refreshToken(@RequestBody Map<String, String> request) {
+        String refreshToken = request.get("refreshToken");
+        AuthResponse response = authService.refreshToken(refreshToken);
+        return ResponseEntity.ok(ApiResponse.success("Token refreshed successfully", response));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<ApiResponse<Void>> logout(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        String token = authHeader != null && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
+        authService.logout(token);
+        return ResponseEntity.ok(ApiResponse.success("Logged out successfully", null));
     }
 
     @PostMapping("/google")
     public ResponseEntity<ApiResponse<AuthResponse>> signInWithGoogle(@RequestBody GoogleAuthRequest request) {
-        try {
-            AuthResponse response = authService.signInWithGoogle(request);
-            return ResponseEntity.ok(ApiResponse.success("Google sign-in successful", response));
-        } catch (SecurityException e) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(ApiResponse.error(e.getMessage()));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(ApiResponse.error(e.getMessage()));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("Unable to sign in with Google. Please try again later."));
-        }
+        AuthResponse response = authService.signInWithGoogle(request);
+        return ResponseEntity.ok(ApiResponse.success("Google sign-in successful", response));
     }
 
     @GetMapping("/me")

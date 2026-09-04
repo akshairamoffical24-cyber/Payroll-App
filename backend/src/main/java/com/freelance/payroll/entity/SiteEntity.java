@@ -5,9 +5,13 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "sites")
+@Table(name = "sites", indexes = {
+    @Index(name = "idx_site_code", columnList = "code", unique = true),
+    @Index(name = "idx_site_status", columnList = "status")
+})
 @Data
 @Builder
 @NoArgsConstructor
@@ -24,6 +28,7 @@ public class SiteEntity {
     private String name;
 
     private String client;
+    private String clientName;
     private String project;
     private String address;
 
@@ -42,4 +47,24 @@ public class SiteEntity {
 
     @Column(nullable = false)
     private String status; // active, inactive
+
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) createdAt = LocalDateTime.now();
+        if (updatedAt == null) updatedAt = LocalDateTime.now();
+        if (status == null) status = "active";
+        if (geofenceRadius == null) geofenceRadius = 150.0;
+        if (clientName == null && client != null) clientName = client;
+        if (client == null && clientName != null) client = clientName;
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+        if (clientName == null && client != null) clientName = client;
+        if (client == null && clientName != null) client = clientName;
+    }
 }

@@ -14,4 +14,6 @@ public interface DailyAttendanceRepository extends JpaRepository<DailyAttendance
     Optional<DailyAttendanceEntity> findByEmployeeIdAndDate(String employeeId, LocalDate date);
     List<DailyAttendanceEntity> findByDateBetween(LocalDate start, LocalDate end);
     List<DailyAttendanceEntity> findByEmployeeIdAndDateBetween(String employeeId, LocalDate start, LocalDate end);
+    long countByDate(LocalDate date);
+    long countByDateAndStatusIgnoreCase(LocalDate date, String status);
 }

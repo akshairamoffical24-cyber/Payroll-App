@@ -23,10 +23,18 @@ public class FaceRegistrationController {
         return ResponseEntity.ok(ApiResponse.success("Face biometric template registered successfully", response));
     }
 
-    @GetMapping("/status/{employeeId}")
+    @GetMapping({"/{employeeId}", "/status/{employeeId}"})
     public ResponseEntity<ApiResponse<FaceStatusResponse>> getFaceStatus(@PathVariable String employeeId) {
         FaceStatusResponse response = faceRegistrationService.getFaceStatus(employeeId);
         return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    @DeleteMapping("/{employeeId}")
+    public ResponseEntity<ApiResponse<FaceStatusResponse>> deleteFaceRegistration(
+            @PathVariable String employeeId,
+            @RequestHeader(value = "X-User-Id", required = false) String userId) {
+        FaceStatusResponse response = faceRegistrationService.invalidateFaceRegistration(employeeId, userId);
+        return ResponseEntity.ok(ApiResponse.success("Face registration deleted successfully", response));
     }
 
     @PostMapping("/invalidate/{employeeId}")

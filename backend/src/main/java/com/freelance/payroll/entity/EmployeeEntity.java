@@ -11,7 +11,12 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "employees")
+@Table(name = "employees", indexes = {
+    @Index(name = "idx_emp_code", columnList = "code", unique = true),
+    @Index(name = "idx_emp_email", columnList = "email"),
+    @Index(name = "idx_emp_department", columnList = "department"),
+    @Index(name = "idx_emp_status", columnList = "status")
+})
 @Data
 @Builder
 @NoArgsConstructor
@@ -30,7 +35,7 @@ public class EmployeeEntity {
 
     private String department;
     private String designation;
-    private String type; // office, field
+    private String type; // office, field, full-time, part-time
     private String phone;
     private String email;
     private String status; // active, inactive
@@ -78,4 +83,30 @@ public class EmployeeEntity {
     private Boolean isFaceRegistered;
     @JsonFormat(pattern = "yyyy-MM-dd[ 'T'HH:mm:ss[.SSS][XXX]]")
     private LocalDateTime faceRegisteredAt;
+
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) createdAt = LocalDateTime.now();
+        if (updatedAt == null) updatedAt = LocalDateTime.now();
+        if (status == null) status = "active";
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+
+    public Double getSalary() {
+        if (monthlyCtc != null) return monthlyCtc;
+        if (basicSalary != null) return basicSalary;
+        return 0.0;
+    }
+
+    public void setSalary(Double salary) {
+        this.monthlyCtc = salary;
+        this.basicSalary = salary != null ? salary * 0.5 : 0.0;
+    }
 }
