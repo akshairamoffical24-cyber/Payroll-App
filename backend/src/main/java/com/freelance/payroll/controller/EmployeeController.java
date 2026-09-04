@@ -1,6 +1,7 @@
 package com.freelance.payroll.controller;
 
 import com.freelance.payroll.dto.ApiResponse;
+import com.freelance.payroll.dto.EmployeeBatchImportRequest;
 import com.freelance.payroll.entity.EmployeeEntity;
 import com.freelance.payroll.service.EmployeeService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,6 +73,14 @@ public class EmployeeController {
     public ResponseEntity<ApiResponse<EmployeeEntity>> updateEmployee(@PathVariable String id, @RequestBody EmployeeEntity employee) {
         EmployeeEntity updated = employeeService.updateEmployee(id, employee);
         return ResponseEntity.ok(ApiResponse.success("Employee updated successfully", updated));
+    }
+
+    @PostMapping(value = "/import", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<ApiResponse<List<EmployeeEntity>>> importEmployeesJson(@RequestBody EmployeeBatchImportRequest request) {
+        List<EmployeeEntity> employees = request != null && request.getEmployees() != null ? request.getEmployees() : List.of();
+        String mode = request != null && request.getMode() != null ? request.getMode() : "addNew";
+        List<EmployeeEntity> result = employeeService.importEmployeesBatch(employees, mode);
+        return ResponseEntity.ok(ApiResponse.success("Employees imported successfully", result));
     }
 
     @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -415,6 +415,64 @@ public class EmployeeService {
         };
     }
 
+    @Transactional
+    public List<EmployeeEntity> importEmployeesBatch(List<EmployeeEntity> employees, String mode) {
+        List<EmployeeEntity> savedList = new ArrayList<>();
+        for (EmployeeEntity emp : employees) {
+            if (emp.getCode() == null || emp.getCode().isBlank()) {
+                emp.setCode("EMP" + UUID.randomUUID().toString().substring(0, 6).toUpperCase());
+            }
+            if (emp.getId() == null || emp.getId().isBlank()) {
+                emp.setId("EMP-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+            }
+            if (emp.getName() == null || emp.getName().isBlank()) {
+                emp.setName("Unnamed Employee");
+            }
+            if (emp.getDepartment() == null || emp.getDepartment().isBlank()) {
+                emp.setDepartment("Engineering");
+            }
+            if (emp.getDesignation() == null || emp.getDesignation().isBlank()) {
+                emp.setDesignation("Staff");
+            }
+            if (emp.getType() == null || emp.getType().isBlank()) {
+                emp.setType("office");
+            }
+            if (emp.getStatus() == null || emp.getStatus().isBlank()) {
+                emp.setStatus("active");
+            }
+            if (emp.getJoiningDate() == null) {
+                emp.setJoiningDate(LocalDate.now());
+            }
+
+            Optional<EmployeeEntity> existingOpt = employeeRepository.findByCodeIgnoreCase(emp.getCode());
+            if (existingOpt.isEmpty() && emp.getId() != null) {
+                existingOpt = employeeRepository.findById(emp.getId());
+            }
+
+            if (existingOpt.isPresent()) {
+                if ("skipExisting".equalsIgnoreCase(mode)) {
+                    continue;
+                }
+                EmployeeEntity existing = existingOpt.get();
+                existing.setName(emp.getName());
+                if (emp.getEmail() != null) existing.setEmail(emp.getEmail());
+                if (emp.getPhone() != null) existing.setPhone(emp.getPhone());
+                if (emp.getDepartment() != null) existing.setDepartment(emp.getDepartment());
+                if (emp.getDesignation() != null) existing.setDesignation(emp.getDesignation());
+                if (emp.getType() != null) existing.setType(emp.getType());
+                if (emp.getStatus() != null) existing.setStatus(emp.getStatus());
+                if (emp.getJoiningDate() != null) existing.setJoiningDate(emp.getJoiningDate());
+                if (emp.getMonthlyCtc() != null) existing.setMonthlyCtc(emp.getMonthlyCtc());
+                if (emp.getBasicSalary() != null) existing.setBasicSalary(emp.getBasicSalary());
+                if (emp.getSalary() != null) existing.setSalary(emp.getSalary());
+                savedList.add(employeeRepository.save(existing));
+            } else {
+                savedList.add(createEmployee(emp));
+            }
+        }
+        return savedList;
+    }
+
     public void toggleStatus(String id) {
         employeeRepository.findById(id).ifPresent(emp -> {
             emp.setStatus("active".equalsIgnoreCase(emp.getStatus()) ? "inactive" : "active");
