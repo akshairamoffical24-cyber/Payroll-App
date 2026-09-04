@@ -263,7 +263,9 @@ CREATE TABLE IF NOT EXISTS payroll_records (
     employee_name VARCHAR(255),
     employee_code VARCHAR(64),
     department VARCHAR(128),
-    payroll_month DATE NOT NULL,
+    payroll_month INT,
+    payroll_year INT,
+    month DATE,
     total_days_in_month INT,
     present_days NUMERIC(5, 2) DEFAULT 0.0,
     paid_leaves NUMERIC(5, 2) DEFAULT 0.0,
@@ -280,7 +282,8 @@ CREATE TABLE IF NOT EXISTS payroll_records (
     status VARCHAR(32) DEFAULT 'draft' -- 'draft', 'processed', 'approved', 'disbursed'
 );
 
-CREATE INDEX IF NOT EXISTS idx_payroll_emp_month ON payroll_records(employee_id, payroll_month);
+CREATE INDEX IF NOT EXISTS idx_payroll_emp_id ON payroll_records(employee_id);
+CREATE INDEX IF NOT EXISTS idx_payroll_month_year ON payroll_records(payroll_year, payroll_month);
 
 -- 14. SYSTEM SETTINGS TABLE
 CREATE TABLE IF NOT EXISTS system_settings (
