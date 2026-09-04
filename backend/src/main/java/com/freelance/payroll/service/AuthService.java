@@ -143,39 +143,12 @@ public class AuthService {
             throw new ForbiddenException("User account is inactive. Please contact your administrator.");
         }
 
-        // Password verification (support BCrypt, fallback to friendly passwords or upgrade)
+        // Password verification (support BCrypt, fallback to plaintext upgrade if legacy)
         boolean passwordMatches = passwordEncoder.matches(rawPassword, user.getPassword());
         if (!passwordMatches && user.getPassword() != null && user.getPassword().equals(rawPassword)) {
             user.setPassword(passwordEncoder.encode(rawPassword));
             userRepository.save(user);
             passwordMatches = true;
-        }
-
-        // For imported employees: allow default password, employee code, or phone
-        if (!passwordMatches) {
-            String empCode = null;
-            String empPhone = null;
-            if (user.getEmployeeId() != null) {
-                Optional<EmployeeEntity> empMatch = employeeRepository.findById(user.getEmployeeId());
-                if (empMatch.isPresent()) {
-                    empCode = empMatch.get().getCode();
-                    empPhone = empMatch.get().getPhone();
-                }
-            }
-            if ((user.getUsername() != null && rawPassword.equalsIgnoreCase(user.getUsername())) ||
-                (empCode != null && rawPassword.equalsIgnoreCase(empCode)) ||
-                (empPhone != null && rawPassword.equals(empPhone.replaceAll("[^0-9]", ""))) ||
-                "123456".equals(rawPassword) ||
-                "password123".equals(rawPassword) ||
-                "changeme2026!".equals(rawPassword) ||
-                "admin123".equals(rawPassword) ||
-                "hr123".equals(rawPassword) ||
-                "field123".equals(rawPassword)) {
-
-                user.setPassword(passwordEncoder.encode(rawPassword));
-                userRepository.save(user);
-                passwordMatches = true;
-            }
         }
 
         if (!passwordMatches) {

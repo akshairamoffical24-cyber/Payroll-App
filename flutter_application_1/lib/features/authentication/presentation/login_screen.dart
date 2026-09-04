@@ -551,8 +551,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 _buildQuickRoleChip('Admin', 'admin@workpulse.com', 'admin123'),
                 _buildQuickRoleChip('HR Manager', 'hr@workpulse.com', 'hr123'),
                 _buildQuickRoleChip('Field Staff', 'field@workpulse.com', 'field123'),
-                _buildQuickRoleChip('Imported (EMP049)', 'EMP049', '123456'),
-                _buildQuickRoleChip('Imported (EMP001)', 'EMP001', '123456'),
               ],
             ),
 
@@ -563,13 +561,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               controller: _emailController,
               keyboardType: TextInputType.emailAddress,
               decoration: const InputDecoration(
-                labelText: 'Work Email / Employee Code (Imported ID)',
-                hintText: 'e.g. EMP049, EMP001, or name@email.com',
-                prefixIcon: Icon(Icons.badge_outlined, size: 20),
+                labelText: 'Work Email ID (Employee Login ID)',
+                hintText: 'e.g. employee@company.com or EMP001',
+                prefixIcon: Icon(Icons.email_outlined, size: 20),
               ),
               validator: (val) {
                 if (val == null || val.trim().isEmpty) {
-                  return 'Please enter your Employee Code or Email';
+                  return 'Please enter your Work Email ID';
                 }
                 return null;
               },
@@ -582,7 +580,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               obscureText: _obscurePassword,
               decoration: InputDecoration(
                 labelText: AppStrings.password,
-                hintText: 'Password (e.g. 123456 or Employee Code)',
+                hintText: 'Enter your password',
                 prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
                 suffixIcon: IconButton(
                   icon: Icon(
