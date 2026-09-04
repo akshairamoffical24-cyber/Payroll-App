@@ -264,7 +264,10 @@ public class AuthService {
 
     @Transactional
     public AuthResponse signInWithGoogle(GoogleAuthRequest request) {
-        String tokenStr = request != null ? request.getEffectiveToken() : null;
+        if (request == null) {
+            throw new UnauthorizedException("Google authentication request cannot be null.");
+        }
+        String tokenStr = request.getEffectiveToken();
         if (tokenStr == null || tokenStr.trim().isEmpty()) {
             throw new UnauthorizedException("Google ID Token is required");
         }
