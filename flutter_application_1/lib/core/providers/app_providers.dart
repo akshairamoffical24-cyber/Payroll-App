@@ -156,6 +156,15 @@ class AuthStateNotifier extends StateNotifier<User?> {
     state = user;
   }
 
+  Future<Map<String, dynamic>> sendOtp(String mobile) async {
+    return await _authRepo.sendOtp(mobile);
+  }
+
+  Future<void> loginWithOtp({required String mobile, required String otp}) async {
+    final user = await _authRepo.loginWithOtp(mobile: mobile, otp: otp);
+    state = user;
+  }
+
   Future<void> logout() async {
     try {
       await _googleAuthService.signOut();

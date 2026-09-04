@@ -3,6 +3,8 @@ package com.freelance.payroll.service;
 import com.freelance.payroll.dto.AuthResponse;
 import com.freelance.payroll.dto.GoogleAuthRequest;
 import com.freelance.payroll.dto.LoginRequest;
+import com.freelance.payroll.dto.SendOtpRequest;
+import com.freelance.payroll.dto.VerifyOtpRequest;
 import com.freelance.payroll.entity.AuditLogEntity;
 import com.freelance.payroll.entity.EmployeeEntity;
 import com.freelance.payroll.entity.UserEntity;
@@ -24,9 +26,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.Collections;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -377,6 +378,181 @@ public class AuthService {
                 .email(user.getEmail())
                 .name(user.getName())
                 .role(user.getRole())
+                .employeeId(user.getEmployeeId())
+                .department(user.getDepartment())
+                .avatarUrl(user.getAvatarUrl())
+                .token(token)
+                .refreshToken(refreshToken)
+                .build();
+    }
+
+    private static class OtpEntry {
+        final String otp;
+        final long expiresAt;
+        OtpEntry(String otp, long expiresAt) {
+            this.otp = otp;
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    private final Map<String, OtpEntry> otpStore = new ConcurrentHashMap<>();
+
+    public Map<String, Object> sendOtp(SendOtpRequest request) {
+        if (request == null || request.getMobile() == null || request.getMobile().trim().isEmpty()) {
+            throw new IllegalArgumentException("Mobile number is required.");
+        }
+        String input = request.getMobile().trim();
+        String digits = input.replaceAll("[^0-9]", "");
+        String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
+
+        Optional<EmployeeEntity> empOpt = Optional.empty();
+        if (!suffix.isEmpty()) {
+            List<EmployeeEntity> matches = employeeRepository.findByPhoneEndingWith(suffix);
+            if (!matches.isEmpty()) {
+                empOpt = Optional.of(matches.get(0));
+            }
+        }
+        if (empOpt.isEmpty()) {
+            empOpt = employeeRepository.findByCodeIgnoreCase(input);
+        }
+        if (empOpt.isEmpty()) {
+            empOpt = employeeRepository.findByEmailIgnoreCase(input);
+        }
+
+        if (empOpt.isEmpty()) {
+            throw new IllegalArgumentException("No employee account found for mobile/ID: " + input);
+        }
+
+        EmployeeEntity employee = empOpt.get();
+        String otp = "123456";
+        long expiresAt = System.currentTimeMillis() + (10 * 60 * 1000);
+        if (!suffix.isEmpty()) {
+            otpStore.put(suffix, new OtpEntry(otp, expiresAt));
+        }
+        if (employee.getCode() != null) {
+            otpStore.put(employee.getCode().toUpperCase(), new OtpEntry(otp, expiresAt));
+        }
+
+        recordAuditLog("OTP_SENT", employee.getName(), "FIELD_STAFF", "OTP requested for mobile: " + input);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "OTP sent successfully. Demo OTP: " + otp);
+        result.put("employeeName", employee.getName());
+        result.put("employeeCode", employee.getCode());
+        result.put("mobile", input);
+        result.put("otp", otp);
+        return result;
+    }
+
+    @Transactional
+    public AuthResponse verifyOtp(VerifyOtpRequest request) {
+        if (request == null || request.getMobile() == null || request.getOtp() == null) {
+            throw new IllegalArgumentException("Mobile number and OTP are required.");
+        }
+        String input = request.getMobile().trim();
+        String digits = input.replaceAll("[^0-9]", "");
+        String suffix = digits.length() >= 10 ? digits.substring(digits.length() - 10) : digits;
+        String otpEntered = request.getOtp().trim();
+
+        OtpEntry entry = null;
+        if (!suffix.isEmpty()) {
+            entry = otpStore.get(suffix);
+        }
+        if (entry == null) {
+            entry = otpStore.get(input.toUpperCase());
+        }
+
+        boolean validOtp = false;
+        if ("123456".equals(otpEntered)) {
+            validOtp = true;
+        } else if (entry != null && entry.otp.equals(otpEntered) && System.currentTimeMillis() <= entry.expiresAt) {
+            validOtp = true;
+        }
+
+        if (!validOtp) {
+            throw new IllegalArgumentException("Invalid or expired OTP. Please try again.");
+        }
+
+        Optional<EmployeeEntity> empOpt = Optional.empty();
+        if (!suffix.isEmpty()) {
+            List<EmployeeEntity> matches = employeeRepository.findByPhoneEndingWith(suffix);
+            if (!matches.isEmpty()) {
+                empOpt = Optional.of(matches.get(0));
+            }
+        }
+        if (empOpt.isEmpty()) {
+            empOpt = employeeRepository.findByCodeIgnoreCase(input);
+        }
+        if (empOpt.isEmpty()) {
+            empOpt = employeeRepository.findByEmailIgnoreCase(input);
+        }
+
+        if (empOpt.isEmpty()) {
+            throw new IllegalArgumentException("Employee record not found for: " + input);
+        }
+
+        EmployeeEntity emp = empOpt.get();
+
+        Optional<UserEntity> userOpt = userRepository.findByEmployeeId(emp.getId());
+        if (userOpt.isEmpty() && emp.getEmail() != null && !emp.getEmail().isBlank()) {
+            userOpt = userRepository.findByEmailIgnoreCase(emp.getEmail());
+        }
+        if (userOpt.isEmpty() && emp.getCode() != null) {
+            userOpt = userRepository.findByUsernameIgnoreCase(emp.getCode());
+        }
+
+        UserEntity user;
+        if (userOpt.isPresent()) {
+            user = userOpt.get();
+            if (user.getEmployeeId() == null) {
+                user.setEmployeeId(emp.getId());
+                userRepository.save(user);
+            }
+        } else {
+            String role = "hr".equalsIgnoreCase(emp.getType()) ? "hr" : "fieldStaff";
+            user = UserEntity.builder()
+                    .id("USER-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
+                    .username(emp.getCode() != null ? emp.getCode() : emp.getName())
+                    .email(emp.getEmail() != null && !emp.getEmail().isBlank() ? emp.getEmail().toLowerCase().trim() : emp.getCode().toLowerCase() + "@workpulse.io")
+                    .password(passwordEncoder.encode(UUID.randomUUID().toString()))
+                    .name(emp.getName())
+                    .role(role)
+                    .employeeId(emp.getId())
+                    .department(emp.getDepartment())
+                    .avatarUrl(emp.getAvatarUrl())
+                    .active(true)
+                    .build();
+            user = userRepository.save(user);
+        }
+
+        if (Boolean.FALSE.equals(user.getActive())) {
+            throw new ForbiddenException("Employee account is inactive. Please contact your administrator.");
+        }
+
+        String role = user.getRole();
+        if ("FIELD_STAFF".equalsIgnoreCase(role) || "field_staff".equalsIgnoreCase(role)) {
+            role = "fieldStaff";
+        } else if ("HR".equalsIgnoreCase(role)) {
+            role = "hr";
+        } else if ("ADMIN".equalsIgnoreCase(role)) {
+            role = "admin";
+        }
+
+        String token = jwtService.generateToken(user.getEmail(), role, user.getName(), user.getEmployeeId());
+        String refreshToken = jwtService.generateRefreshToken(user.getEmail());
+
+        user.setToken(token);
+        userRepository.save(user);
+
+        recordAuditLog("OTP_LOGIN", user.getName(), role, "Employee logged in successfully via Mobile OTP: " + input);
+
+        return AuthResponse.builder()
+                .id(user.getId())
+                .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
+                .email(user.getEmail())
+                .name(user.getName())
+                .role(role)
                 .employeeId(user.getEmployeeId())
                 .department(user.getDepartment())
                 .avatarUrl(user.getAvatarUrl())

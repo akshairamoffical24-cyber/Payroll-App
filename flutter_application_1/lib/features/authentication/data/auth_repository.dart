@@ -7,6 +7,8 @@ abstract class AuthRepository {
   Future<User?> getCurrentUser();
   Future<User> login({required String emailOrId, required String password});
   Future<User> signInWithGoogle({GoogleAuthPayload? payload});
+  Future<Map<String, dynamic>> sendOtp(String mobile);
+  Future<User> loginWithOtp({required String mobile, required String otp});
   Future<void> logout();
 }
 
@@ -171,6 +173,54 @@ class MockAuthRepository implements AuthRepository {
     }
 
     throw Exception('Invalid credentials. Please check your Email / Employee ID and password.');
+  }
+
+  @override
+  Future<Map<String, dynamic>> sendOtp(String mobile) async {
+    await Future.delayed(const Duration(milliseconds: 400));
+    final clean = mobile.replaceAll(RegExp(r'\D'), '');
+    final suffix = clean.length >= 10 ? clean.substring(clean.length - 10) : clean;
+    final matchedEmp = MockEmployeeRepository.seedEmployees.where((e) {
+      final empPhone = e.phone.replaceAll(RegExp(r'\D'), '');
+      return empPhone.endsWith(suffix);
+    }).firstOrNull;
+
+    final empName = matchedEmp?.name ?? 'Employee';
+    return {
+      'success': true,
+      'mobile': mobile,
+      'otp': '123456',
+      'message': 'OTP sent successfully to registered mobile number for $empName',
+      'employeeName': empName,
+    };
+  }
+
+  @override
+  Future<User> loginWithOtp({required String mobile, required String otp}) async {
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (otp != '123456') {
+      throw Exception('Invalid OTP. Please enter 123456 in demo mode.');
+    }
+    final clean = mobile.replaceAll(RegExp(r'\D'), '');
+    final suffix = clean.length >= 10 ? clean.substring(clean.length - 10) : clean;
+    final matchedEmp = MockEmployeeRepository.seedEmployees.where((e) {
+      final empPhone = e.phone.replaceAll(RegExp(r'\D'), '');
+      return empPhone.endsWith(suffix);
+    }).firstOrNull;
+
+    final empId = matchedEmp?.id ?? 'EMP-001';
+    final empName = matchedEmp?.name ?? 'Field Staff';
+    final user = User(
+      id: 'USR-$empId',
+      email: matchedEmp?.email ?? '$suffix@workpulse.io',
+      name: empName,
+      role: UserRole.fieldStaff,
+      employeeId: empId,
+      avatarUrl: matchedEmp?.avatarUrl,
+      token: 'jwt_${empId}_otp_token',
+    );
+    _currentUser = user;
+    return user;
   }
 
   @override

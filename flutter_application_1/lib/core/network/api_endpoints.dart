@@ -10,6 +10,8 @@ class ApiEndpoints {
   static String get login => '$baseUrl/auth/login';
   static String get googleLogin => '$baseUrl/auth/google';
   static String get currentUser => '$baseUrl/auth/me';
+  static String get sendOtp => '$baseUrl/auth/otp/send';
+  static String get verifyOtp => '$baseUrl/auth/otp/verify';
 
   // Employees
   static String get employees => '$baseUrl/employees';

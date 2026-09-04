@@ -4,6 +4,8 @@ import com.freelance.payroll.dto.ApiResponse;
 import com.freelance.payroll.dto.AuthResponse;
 import com.freelance.payroll.dto.GoogleAuthRequest;
 import com.freelance.payroll.dto.LoginRequest;
+import com.freelance.payroll.dto.SendOtpRequest;
+import com.freelance.payroll.dto.VerifyOtpRequest;
 import com.freelance.payroll.service.AuthService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -27,6 +29,18 @@ public class AuthController {
     public ResponseEntity<ApiResponse<AuthResponse>> login(@RequestBody LoginRequest request) {
         AuthResponse response = authService.login(request);
         return ResponseEntity.ok(ApiResponse.success("Login successful", response));
+    }
+
+    @PostMapping("/otp/send")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> sendOtp(@RequestBody SendOtpRequest request) {
+        Map<String, Object> response = authService.sendOtp(request);
+        return ResponseEntity.ok(ApiResponse.success("OTP sent", response));
+    }
+
+    @PostMapping("/otp/verify")
+    public ResponseEntity<ApiResponse<AuthResponse>> verifyOtp(@RequestBody VerifyOtpRequest request) {
+        AuthResponse response = authService.verifyOtp(request);
+        return ResponseEntity.ok(ApiResponse.success("Employee login successful", response));
     }
 
     @PostMapping("/refresh")

@@ -26,11 +26,124 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _isLoading = false;
   bool _isGoogleLoading = false;
 
+  int _selectedAuthTab = 0; // 0 = Admin / HR Portal, 1 = Employee Login (OTP)
+  final _employeeMobileController = TextEditingController();
+  final _otpController = TextEditingController();
+  bool _isSendingOtp = false;
+  bool _isOtpSent = false;
+  bool _isVerifyingOtp = false;
+  String? _detectedEmployeeName;
+
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _employeeMobileController.dispose();
+    _otpController.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleSendOtp() async {
+    final mobile = _employeeMobileController.text.trim();
+    if (mobile.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter your 10-digit registered mobile number'),
+          backgroundColor: AppColors.absent,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSendingOtp = true;
+    });
+
+    try {
+      final res = await ref.read(authStateProvider.notifier).sendOtp(mobile);
+      if (!mounted) return;
+      final empName = res['employeeName'] as String?;
+      final otpCode = res['otp'] as String?;
+      setState(() {
+        _isOtpSent = true;
+        _detectedEmployeeName = empName;
+        if (otpCode != null && otpCode.isNotEmpty) {
+          _otpController.text = otpCode;
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'OTP sent to $mobile${empName != null ? " ($empName)" : ""}! Demo code: ${otpCode ?? "123456"}',
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: AppColors.present,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      final err = e.toString().replaceAll('Exception:', '').trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(err.isNotEmpty ? err : 'Failed to send OTP. Please check your mobile number.'),
+          backgroundColor: AppColors.absent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSendingOtp = false);
+    }
+  }
+
+  Future<void> _handleEmployeeOtpLogin() async {
+    final mobile = _employeeMobileController.text.trim();
+    final otp = _otpController.text.trim();
+
+    if (mobile.isEmpty || otp.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter your mobile number and the 6-digit OTP code'),
+          backgroundColor: AppColors.absent,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isVerifyingOtp = true);
+
+    try {
+      await ref.read(authStateProvider.notifier).loginWithOtp(
+            mobile: mobile,
+            otp: otp,
+          );
+
+      if (!mounted) return;
+
+      final currentUser = ref.read(authStateProvider);
+      if (currentUser?.role == UserRole.fieldStaff) {
+        context.go('/field-dashboard');
+      } else {
+        context.go('/dashboard');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      final err = e.toString().replaceAll('Exception:', '').trim();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Verification failed: $err'),
+          backgroundColor: AppColors.absent,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isVerifyingOtp = false);
+    }
   }
 
   Future<void> _handleLogin() async {
@@ -540,197 +653,515 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 18),
 
-            // Quick Role Switcher Pills for Testing
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              alignment: WrapAlignment.center,
-              children: [
-                _buildQuickRoleChip('Admin', 'admin@workpulse.com', 'admin123'),
-                _buildQuickRoleChip('HR Manager', 'hr@workpulse.com', 'hr123'),
-                _buildQuickRoleChip('Field Staff', 'field@workpulse.com', 'field123'),
-              ],
-            ),
+            // Mode Selector Tabs: [ Admin / HR Portal ] | [ Employee Login (OTP) ]
+            _buildLoginModeSelector(isDark),
 
             const SizedBox(height: 18),
 
-            // Work Email / Emp ID Input
-            TextFormField(
-              controller: _emailController,
-              keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(
-                labelText: 'Work Email ID (Employee Login ID)',
-                hintText: 'e.g. employee@company.com or EMP001',
-                prefixIcon: Icon(Icons.email_outlined, size: 20),
+            if (_selectedAuthTab == 0) ...[
+              // Quick Role Switcher Pills for Testing
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                alignment: WrapAlignment.center,
+                children: [
+                  _buildQuickRoleChip('Admin', 'admin@workpulse.com', 'admin123'),
+                  _buildQuickRoleChip('HR Manager', 'hr@workpulse.com', 'hr123'),
+                  _buildQuickRoleChip('Field Staff', 'field@workpulse.com', 'field123'),
+                ],
               ),
-              validator: (val) {
-                if (val == null || val.trim().isEmpty) {
-                  return 'Please enter your Work Email ID';
-                }
-                return null;
-              },
-            ),
-            const SizedBox(height: 14),
 
-            // Password Input
-            TextFormField(
-              controller: _passwordController,
-              obscureText: _obscurePassword,
-              decoration: InputDecoration(
-                labelText: AppStrings.password,
-                hintText: 'Enter your password',
-                prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
-                suffixIcon: IconButton(
-                  icon: Icon(
-                    _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                    size: 20,
-                  ),
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+              const SizedBox(height: 18),
+
+              // Work Email / Emp ID Input
+              TextFormField(
+                controller: _emailController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Work Email ID (Admin / HR Login)',
+                  hintText: 'e.g. admin@workpulse.com',
+                  prefixIcon: Icon(Icons.email_outlined, size: 20),
                 ),
+                validator: (val) {
+                  if (val == null || val.trim().isEmpty) {
+                    return 'Please enter your Work Email ID';
+                  }
+                  return null;
+                },
               ),
-              validator: (val) {
-                if (val == null || val.isEmpty) {
-                  return 'Please enter your password';
-                }
-                return null;
-              },
-            ),
+              const SizedBox(height: 14),
 
-            const SizedBox(height: 12),
+              // Password Input
+              TextFormField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                decoration: InputDecoration(
+                  labelText: AppStrings.password,
+                  hintText: 'Enter your password',
+                  prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                      size: 20,
+                    ),
+                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                  ),
+                ),
+                validator: (val) {
+                  if (val == null || val.isEmpty) {
+                    return 'Please enter your password';
+                  }
+                  return null;
+                },
+              ),
 
-            // Remember Me & Forgot Password
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 22,
-                      height: 22,
-                      child: Checkbox(
-                        value: _rememberMe,
-                        onChanged: (val) => setState(() => _rememberMe = val ?? true),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+              const SizedBox(height: 12),
+
+              // Remember Me & Forgot Password
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: Checkbox(
+                          value: _rememberMe,
+                          onChanged: (val) => setState(() => _rememberMe = val ?? true),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        AppStrings.rememberMe,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Password reset instructions sent to your email.')),
+                      );
+                    },
+                    child: const Text(
+                      AppStrings.forgotPassword,
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 18),
+
+              // Manual Sign In Button
+              ElevatedButton(
+                onPressed: (_isLoading || _isGoogleLoading) ? null : _handleLogin,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                      )
+                    : const Text(
+                        AppStrings.signIn,
+                        style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
+                      ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // Divider "OR CONTINUE WITH"
+              Row(
+                children: [
+                  Expanded(child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder)),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Text(
+                      'OR CONTINUE WITH',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.5,
+                        color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
                       ),
                     ),
-                    const SizedBox(width: 6),
+                  ),
+                  Expanded(child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder)),
+                ],
+              ),
+
+              const SizedBox(height: 14),
+
+              // Google Sign In Button
+              OutlinedButton(
+                onPressed: (_isLoading || _isGoogleLoading) ? null : _handleGoogleSignIn,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  side: BorderSide(
+                    color: isDark ? Colors.white.withOpacity(0.18) : Colors.black.withOpacity(0.12),
+                  ),
+                  backgroundColor: isDark ? Colors.white.withOpacity(0.04) : Colors.white.withOpacity(0.7),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: _isGoogleLoading
+                    ? const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.primary),
+                          ),
+                          SizedBox(width: 10),
+                          Text(
+                            'Authenticating with Google...',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const _GoogleLogoIcon(size: 18),
+                          const SizedBox(width: 10),
+                          Text(
+                            AppStrings.signInWithGoogle,
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                              color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ] else ...[
+              _buildEmployeeLoginForm(isDark),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoginModeSelector(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.06),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildModeTab(
+              index: 0,
+              icon: Icons.admin_panel_settings_rounded,
+              label: 'Admin / HR',
+              isSelected: _selectedAuthTab == 0,
+              isDark: isDark,
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: _buildModeTab(
+              index: 1,
+              icon: Icons.person_pin_circle_rounded,
+              label: 'Employee (OTP)',
+              isSelected: _selectedAuthTab == 1,
+              isDark: isDark,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModeTab({
+    required int index,
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required bool isDark,
+  }) {
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _selectedAuthTab = index;
+        });
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: AppColors.primary.withOpacity(0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isSelected
+                  ? Colors.white
+                  : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected
+                    ? Colors.white
+                    : (isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmployeeLoginForm(bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Employee Info Banner
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.badge_rounded, color: AppColors.primary, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      AppStrings.rememberMe,
+                      'Field Staff & Employee Portal',
                       style: TextStyle(
-                        fontSize: 12.5,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Sign in with your registered phone number to mark attendance and access self-service.',
+                      style: TextStyle(
+                        fontSize: 11.5,
                         color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
                       ),
                     ),
                   ],
                 ),
-                TextButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Password reset instructions sent to your email.')),
-                    );
-                  },
-                  child: const Text(
-                    AppStrings.forgotPassword,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 18),
-
-            // Manual Sign In Button
-            ElevatedButton(
-              onPressed: (_isLoading || _isGoogleLoading) ? null : _handleLogin,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
-              child: _isLoading
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
-                    )
-                  : const Text(
-                      AppStrings.signIn,
-                      style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
-                    ),
-            ),
+            ],
+          ),
+        ),
 
-            const SizedBox(height: 16),
+        const SizedBox(height: 16),
 
-            // Divider "OR CONTINUE WITH"
-            Row(
-              children: [
-                Expanded(child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: Text(
-                    'OR CONTINUE WITH',
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5,
-                      color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                    ),
-                  ),
-                ),
-                Expanded(child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder)),
-              ],
-            ),
+        // Quick Test Helper Chips
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          alignment: WrapAlignment.center,
+          children: [
+            _buildQuickEmployeeChip('AKSHAIRAM (EMP001)', '6374990354'),
+            _buildQuickEmployeeChip('Field Staff (EMP048)', '9876543210'),
+          ],
+        ),
 
-            const SizedBox(height: 14),
+        const SizedBox(height: 16),
 
-            // Google Sign In Button
-            OutlinedButton(
-              onPressed: (_isLoading || _isGoogleLoading) ? null : _handleGoogleSignIn,
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                side: BorderSide(
-                  color: isDark ? Colors.white.withOpacity(0.18) : Colors.black.withOpacity(0.12),
-                ),
-                backgroundColor: isDark ? Colors.white.withOpacity(0.04) : Colors.white.withOpacity(0.7),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        // Mobile Number Field
+        TextFormField(
+          controller: _employeeMobileController,
+          keyboardType: TextInputType.phone,
+          decoration: InputDecoration(
+            labelText: 'Registered Mobile Number',
+            hintText: 'e.g. 6374990354',
+            prefixIcon: const Icon(Icons.phone_iphone_rounded, size: 20),
+            suffixIcon: Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: TextButton(
+                onPressed: _isSendingOtp ? null : _handleSendOtp,
+                child: _isSendingOtp
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(
+                        _isOtpSent ? 'Resend' : 'Send OTP',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                      ),
               ),
-              child: _isGoogleLoading
-                  ? const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.primary),
-                        ),
-                        SizedBox(width: 10),
-                        Text(
-                          'Authenticating with Google...',
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const _GoogleLogoIcon(size: 18),
-                        const SizedBox(width: 10),
-                        Text(
-                          AppStrings.signInWithGoogle,
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
-                            color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                          ),
-                        ),
-                      ],
+            ),
+          ),
+        ),
+
+        if (_isOtpSent) ...[
+          const SizedBox(height: 14),
+
+          // OTP Code Field
+          TextFormField(
+            controller: _otpController,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            decoration: InputDecoration(
+              counterText: '',
+              labelText: '6-Digit OTP Code',
+              hintText: 'Enter 6-digit OTP (Demo: 123456)',
+              prefixIcon: const Icon(Icons.key_rounded, size: 20),
+              suffixIcon: IconButton(
+                tooltip: 'Fill Demo OTP (123456)',
+                icon: const Icon(Icons.auto_fix_high_rounded, size: 18, color: AppColors.primary),
+                onPressed: () {
+                  setState(() => _otpController.text = '123456');
+                },
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 6),
+
+          // Matched Employee Badge
+          if (_detectedEmployeeName != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Row(
+                children: [
+                  const Icon(Icons.person_outline_rounded, size: 14, color: AppColors.present),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Matched Employee: $_detectedEmployeeName',
+                    style: const TextStyle(fontSize: 12, color: AppColors.present, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+        ],
+
+        const SizedBox(height: 20),
+
+        // Action Button: Send OTP or Verify & Login
+        ElevatedButton(
+          onPressed: (_isSendingOtp || _isVerifyingOtp)
+              ? null
+              : (_isOtpSent ? _handleEmployeeOtpLogin : _handleSendOtp),
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+          child: (_isSendingOtp || _isVerifyingOtp)
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                )
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      _isOtpSent ? Icons.login_rounded : Icons.sms_outlined,
+                      size: 18,
+                      color: Colors.white,
                     ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _isOtpSent ? 'Verify & Login as Employee' : 'Send OTP via Mobile',
+                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // Helper Note
+        Center(
+          child: Text(
+            'In development mode, Demo OTP is 123456.',
+            style: TextStyle(
+              fontSize: 11.5,
+              color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildQuickEmployeeChip(String label, String mobile) {
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _employeeMobileController.text = mobile;
+          _otpController.text = '123456';
+          _isOtpSent = true;
+        });
+      },
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: AppColors.present.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppColors.present.withOpacity(0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.bolt_rounded, size: 13, color: AppColors.present),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.present),
             ),
           ],
         ),

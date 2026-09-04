@@ -16,6 +16,9 @@ public interface EmployeeRepository extends JpaRepository<EmployeeEntity, String
     Optional<EmployeeEntity> findByCodeIgnoreCase(String code);
     Optional<EmployeeEntity> findByEmailIgnoreCase(String email);
     Optional<EmployeeEntity> findByPhone(String phone);
+    
+    @Query("SELECT e FROM EmployeeEntity e WHERE e.phone LIKE CONCAT('%', :phoneSuffix)")
+    List<EmployeeEntity> findByPhoneEndingWith(@Param("phoneSuffix") String phoneSuffix);
     List<EmployeeEntity> findByDepartmentIgnoreCase(String department);
     Page<EmployeeEntity> findByDepartmentIgnoreCase(String department, Pageable pageable);
     List<EmployeeEntity> findByStatusIgnoreCase(String status);

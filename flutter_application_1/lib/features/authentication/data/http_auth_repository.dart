@@ -69,6 +69,52 @@ class HttpAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<Map<String, dynamic>> sendOtp(String mobile) async {
+    try {
+      final response = await _apiClient.post(
+        ApiEndpoints.sendOtp,
+        body: {'mobile': mobile.trim()},
+      );
+      if (response is Map<String, dynamic>) {
+        return response;
+      }
+      return {'success': true, 'message': 'OTP sent'};
+    } on ApiException catch (e) {
+      debugPrint('[HttpAuthRepo] Send OTP rejected: ${e.message}');
+      throw Exception(e.message);
+    } catch (e) {
+      debugPrint('[HttpAuthRepo] Send OTP error: $e');
+      throw Exception('Failed to send OTP: $e');
+    }
+  }
+
+  @override
+  Future<User> loginWithOtp({required String mobile, required String otp}) async {
+    try {
+      final response = await _apiClient.post(
+        ApiEndpoints.verifyOtp,
+        body: {'mobile': mobile.trim(), 'otp': otp.trim()},
+      );
+      if (response is Map<String, dynamic>) {
+        final user = User.fromJson(response);
+        _currentUser = user;
+        _apiClient.setAuthToken(user.token);
+        if (user.token != null) {
+          await _persistUser(user, user.token!);
+        }
+        return user;
+      }
+      throw ApiException('Unexpected response format received from OTP verification.');
+    } on ApiException catch (e) {
+      debugPrint('[HttpAuthRepo] OTP login rejected: ${e.message}');
+      throw Exception(e.message);
+    } catch (e) {
+      debugPrint('[HttpAuthRepo] OTP login error: $e');
+      throw Exception('Failed to sign in with OTP: $e');
+    }
+  }
+
+  @override
   Future<User> signInWithGoogle({GoogleAuthPayload? payload}) async {
     try {
       final response = await _apiClient.post(

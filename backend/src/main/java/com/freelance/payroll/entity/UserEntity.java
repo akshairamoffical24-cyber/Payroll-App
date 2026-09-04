@@ -39,6 +39,7 @@ public class UserEntity {
     private String employeeId;
     private String department;
     private String avatarUrl;
+    @Column(columnDefinition = "TEXT")
     private String token;
     private String googleSubjectId;
     
