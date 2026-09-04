@@ -15,6 +15,7 @@ public interface EmployeeRepository extends JpaRepository<EmployeeEntity, String
     Optional<EmployeeEntity> findByCode(String code);
     Optional<EmployeeEntity> findByCodeIgnoreCase(String code);
     Optional<EmployeeEntity> findByEmailIgnoreCase(String email);
+    Optional<EmployeeEntity> findByPhone(String phone);
     List<EmployeeEntity> findByDepartmentIgnoreCase(String department);
     Page<EmployeeEntity> findByDepartmentIgnoreCase(String department, Pageable pageable);
     List<EmployeeEntity> findByStatusIgnoreCase(String status);

@@ -76,14 +76,21 @@ class User {
   }
 
   factory User.fromJson(Map<String, dynamic> json) {
+    final roleRaw = json['role']?.toString().toLowerCase().replaceAll('_', '') ?? '';
+    UserRole parsedRole = UserRole.fieldStaff;
+    if (roleRaw == 'admin') {
+      parsedRole = UserRole.admin;
+    } else if (roleRaw == 'hr') {
+      parsedRole = UserRole.hr;
+    } else {
+      parsedRole = UserRole.fieldStaff;
+    }
+
     return User(
       id: json['id']?.toString() ?? '',
       email: json['email']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
-      role: UserRole.values.firstWhere(
-        (r) => r.name == json['role'],
-        orElse: () => UserRole.fieldStaff,
-      ),
+      role: parsedRole,
       employeeId: json['employeeId']?.toString(),
       department: json['department']?.toString(),
       avatarUrl: json['avatarUrl']?.toString(),
