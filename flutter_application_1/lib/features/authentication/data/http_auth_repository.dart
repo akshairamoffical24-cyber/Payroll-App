@@ -141,6 +141,14 @@ class HttpAuthRepository implements AuthRepository {
   }
 
   @override
+  void updateLocalUser(User user) {
+    _currentUser = user;
+    if (user.token != null) {
+      _persistUser(user, user.token!);
+    }
+  }
+
+  @override
   Future<void> logout() async {
     _currentUser = null;
     _apiClient.setAuthToken(null);

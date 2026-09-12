@@ -1,0 +1,4 @@
+-I./flutter/ephemeral
+-IC:/flutter/bin/cache/artifacts/engine/windows-x64/cpp_client_wrapper/include
+-std=c++17
+-Wno-unused-includes

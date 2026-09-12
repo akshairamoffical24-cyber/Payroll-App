@@ -1,0 +1,7 @@
+# Clangd configuration to suppress IDE false positives in Flutter's generated native Windows code
+If:
+  PathMatch: .*(/|\\)windows(/|\\).*
+Diagnostics:
+  Suppress:
+    - pp_file_not_found
+    - file_not_found

@@ -25,7 +25,12 @@ class User {
   final String name;
   final UserRole role;
   final String? employeeId;
+  final String? employeeCode;
   final String? department;
+  final String? designation;
+  final String? phone;
+  final double? monthlyCtc;
+  final String? username;
   final String? avatarUrl;
   final String? token;
 
@@ -35,7 +40,12 @@ class User {
     required this.name,
     required this.role,
     this.employeeId,
+    this.employeeCode,
     this.department,
+    this.designation,
+    this.phone,
+    this.monthlyCtc,
+    this.username,
     this.avatarUrl,
     this.token,
   });
@@ -46,7 +56,12 @@ class User {
     String? name,
     UserRole? role,
     String? employeeId,
+    String? employeeCode,
     String? department,
+    String? designation,
+    String? phone,
+    double? monthlyCtc,
+    String? username,
     String? avatarUrl,
     String? token,
   }) {
@@ -56,7 +71,12 @@ class User {
       name: name ?? this.name,
       role: role ?? this.role,
       employeeId: employeeId ?? this.employeeId,
+      employeeCode: employeeCode ?? this.employeeCode,
       department: department ?? this.department,
+      designation: designation ?? this.designation,
+      phone: phone ?? this.phone,
+      monthlyCtc: monthlyCtc ?? this.monthlyCtc,
+      username: username ?? this.username,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       token: token ?? this.token,
     );
@@ -69,7 +89,12 @@ class User {
       'name': name,
       'role': role.name,
       'employeeId': employeeId,
+      'employeeCode': employeeCode,
       'department': department,
+      'designation': designation,
+      'phone': phone,
+      'monthlyCtc': monthlyCtc,
+      'username': username,
       'avatarUrl': avatarUrl,
       'token': token,
     };
@@ -86,13 +111,27 @@ class User {
       parsedRole = UserRole.fieldStaff;
     }
 
+    double? parsedMonthlyCtc;
+    if (json['monthlyCtc'] != null) {
+      if (json['monthlyCtc'] is num) {
+        parsedMonthlyCtc = (json['monthlyCtc'] as num).toDouble();
+      } else {
+        parsedMonthlyCtc = double.tryParse(json['monthlyCtc'].toString());
+      }
+    }
+
     return User(
       id: json['id']?.toString() ?? '',
       email: json['email']?.toString() ?? '',
       name: json['name']?.toString() ?? '',
       role: parsedRole,
       employeeId: json['employeeId']?.toString(),
+      employeeCode: json['employeeCode']?.toString(),
       department: json['department']?.toString(),
+      designation: json['designation']?.toString(),
+      phone: json['phone']?.toString(),
+      monthlyCtc: parsedMonthlyCtc,
+      username: json['username']?.toString(),
       avatarUrl: json['avatarUrl']?.toString(),
       token: json['token']?.toString(),
     );

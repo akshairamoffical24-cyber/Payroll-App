@@ -37,7 +37,7 @@ class AdminDashboardScreen extends ConsumerWidget {
       body: Column(
         children: [
           AppHeader(
-            title: 'Enterprise Attendance Command Center',
+            title: ' Attendance Center',
             subtitle: 'Real-time workforce monitoring, biometric sync & GPS geofence analytics',
             trailing: Wrap(
               spacing: 10,

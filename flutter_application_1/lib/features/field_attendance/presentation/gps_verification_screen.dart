@@ -807,7 +807,7 @@ class _GpsVerificationScreenState extends ConsumerState<GpsVerificationScreen> {
                             ],
                           ),
                           content: Text(
-                            'Your remarks and timing correction have been forwarded to Sarah Jenkins (HR) and Alexander Wright (Admin).\n\n'
+                            'Your remarks and timing correction have been forwarded to Sarah Jenkins (HR) and Premkumar (Admin).\n\n'
                             '• Requested Timing: $inTimeStr - $outTimeStr\n'
                             '• Category: $selectedReason\n'
                             '• Remarks: "$remarksText"\n\n'

@@ -10,6 +10,7 @@ abstract class AuthRepository {
   Future<Map<String, dynamic>> sendOtp(String mobile);
   Future<User> loginWithOtp({required String mobile, required String otp});
   Future<void> logout();
+  void updateLocalUser(User user);
 }
 
 class MockAuthRepository implements AuthRepository {
@@ -19,7 +20,7 @@ class MockAuthRepository implements AuthRepository {
     const User(
       id: 'USR-ADM-001',
       email: 'admin@workpulse.com',
-      name: 'Alexander Wright',
+      name: 'Premkumar',
       role: UserRole.admin,
       avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
       token: 'jwt_admin_token_xyz890',
@@ -35,6 +36,11 @@ class MockAuthRepository implements AuthRepository {
   ];
 
   @override
+  void updateLocalUser(User user) {
+    _currentUser = user;
+  }
+
+  @override
   Future<User?> getCurrentUser() async {
     return _currentUser;
   }
@@ -43,7 +49,7 @@ class MockAuthRepository implements AuthRepository {
   Future<User> signInWithGoogle({GoogleAuthPayload? payload}) async {
     await Future.delayed(const Duration(milliseconds: 650));
     final email = payload?.email.toLowerCase().trim() ?? 'admin@workpulse.com';
-    final name = payload?.name ?? (payload != null ? payload.email.split('@').first : 'Alexander Wright');
+    final name = payload?.name ?? (payload != null ? payload.email.split('@').first : 'Premkumar');
 
     if (email == 'admin@workpulse.com' || email.contains('admin')) {
       final user = User(

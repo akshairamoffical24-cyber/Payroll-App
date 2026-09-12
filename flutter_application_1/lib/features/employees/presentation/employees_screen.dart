@@ -51,40 +51,71 @@ class _EmployeesScreenState extends ConsumerState<EmployeesScreen> {
           AppHeader(
             title: 'Employee Directory & Masters',
             subtitle: 'Enterprise workforce master, Excel onboarding, and bi-modal attendance profile settings',
-            trailing: Wrap(
-              spacing: 10,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _downloadTemplate,
-                  icon: const Icon(Icons.download_rounded, size: 16),
-                  label: const Text('Download Template'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => context.go('/import-history'),
-                  icon: const Icon(Icons.history_rounded, size: 16),
-                  label: const Text('Import History'),
-                ),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF0D9488),
-                    foregroundColor: Colors.white,
-                  ),
-                  icon: const Icon(Icons.file_upload_rounded, size: 16),
-                  label: const Text('Import Excel', style: TextStyle(fontWeight: FontWeight.bold)),
-                  onPressed: _openImportDialog,
-                ),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primary,
-                    foregroundColor: Colors.white,
-                  ),
-                  icon: const Icon(Icons.person_add_alt_1_rounded, size: 16),
-                  label: const Text('+ Add Employee', style: TextStyle(fontWeight: FontWeight.bold)),
-                  onPressed: () => context.go('/onboarding'),
-                ),
-              ],
+            trailing: Builder(
+              builder: (context) {
+                final screenWidth = MediaQuery.sizeOf(context).width;
+                final isWide = screenWidth >= 1250;
+
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isWide)
+                      OutlinedButton.icon(
+                        onPressed: _downloadTemplate,
+                        icon: const Icon(Icons.download_rounded, size: 16),
+                        label: const Text('Download Template'),
+                      )
+                    else
+                      Tooltip(
+                        message: 'Download Excel Template',
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                          ),
+                          onPressed: _downloadTemplate,
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.download_rounded, size: 16),
+                              SizedBox(width: 4),
+                              Text('Template', style: TextStyle(fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                      ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0D9488),
+                        foregroundColor: Colors.white,
+                        elevation: 1,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      ),
+                      icon: const Icon(Icons.file_upload_rounded, size: 18),
+                      label: const Text(
+                        'Import Excel',
+                        style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.2),
+                      ),
+                      onPressed: _openImportDialog,
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        elevation: 1,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      ),
+                      icon: const Icon(Icons.person_add_alt_1_rounded, size: 18),
+                      label: const Text(
+                        '+ Add Employee',
+                        style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.2),
+                      ),
+                      onPressed: () => context.go('/onboarding'),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
           Expanded(

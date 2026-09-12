@@ -37,7 +37,7 @@ class HrDashboardScreen extends ConsumerWidget {
       body: Column(
         children: [
           AppHeader(
-            title: 'HR Workforce Operations Center',
+            title: 'HR Workplace',
             subtitle: 'Daily attendance verification, Excel onboarding, site mapping & correction audit',
             trailing: Wrap(
               spacing: 10,

@@ -159,17 +159,75 @@ class DailyAttendance {
   }
 
   factory DailyAttendance.fromJson(Map<String, dynamic> json) {
+    AttendancePunch? parseFirstPunch() {
+      if (json['firstPunch'] != null && json['firstPunch'] is Map<String, dynamic>) {
+        return AttendancePunch.fromJson(json['firstPunch'] as Map<String, dynamic>);
+      }
+      if (json['firstPunchTime'] != null) {
+        return AttendancePunch(
+          id: json['firstPunchId'] as String? ?? 'PUNCH-IN',
+          employeeId: json['employeeId'] as String? ?? '',
+          timestamp: DateTime.parse(json['firstPunchTime'] as String),
+          type: json['firstPunchType'] == 'outPunch' ? PunchType.outPunch : PunchType.inPunch,
+          source: json['firstPunchSource'] == 'biometric' ? PunchSource.biometric : PunchSource.mobile,
+          siteName: json['firstPunchSiteName'] as String?,
+          isVerified: true,
+        );
+      }
+      return null;
+    }
+
+    AttendancePunch? parseLastPunch() {
+      if (json['lastPunch'] != null && json['lastPunch'] is Map<String, dynamic>) {
+        return AttendancePunch.fromJson(json['lastPunch'] as Map<String, dynamic>);
+      }
+      if (json['lastPunchTime'] != null) {
+        return AttendancePunch(
+          id: json['lastPunchId'] as String? ?? 'PUNCH-OUT',
+          employeeId: json['employeeId'] as String? ?? '',
+          timestamp: DateTime.parse(json['lastPunchTime'] as String),
+          type: json['lastPunchType'] == 'inPunch' ? PunchType.inPunch : PunchType.outPunch,
+          source: json['lastPunchSource'] == 'biometric' ? PunchSource.biometric : PunchSource.mobile,
+          siteName: json['lastPunchSiteName'] as String?,
+          isVerified: true,
+        );
+      }
+      return null;
+    }
+
+    final first = parseFirstPunch();
+    final last = parseLastPunch();
+
+    List<String> parseSites() {
+      if (json['visitedSiteNames'] is List) {
+        return (json['visitedSiteNames'] as List).map((e) => e.toString()).toList();
+      }
+      if (json['visitedSiteNamesJson'] != null && json['visitedSiteNamesJson'].toString().isNotEmpty) {
+        return json['visitedSiteNamesJson'].toString().split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      }
+      final sites = <String>[];
+      final fSite = first?.siteName;
+      if (fSite != null) sites.add(fSite);
+      final lSite = last?.siteName;
+      if (lSite != null && !sites.contains(lSite)) sites.add(lSite);
+      return sites;
+    }
+
+    final durationMinutes = (json['workingDurationMinutes'] as int?) ??
+        (json['workingMinutes'] as int?) ??
+        (first != null && last != null ? last.timestamp.difference(first.timestamp).inMinutes.clamp(0, 1440) : 0);
+
     return DailyAttendance(
       id: json['id'] as String,
       employeeId: json['employeeId'] as String,
       date: DateTime.parse(json['date'] as String),
-      firstPunch: json['firstPunch'] != null ? AttendancePunch.fromJson(json['firstPunch'] as Map<String, dynamic>) : null,
-      lastPunch: json['lastPunch'] != null ? AttendancePunch.fromJson(json['lastPunch'] as Map<String, dynamic>) : null,
+      firstPunch: first,
+      lastPunch: last,
       allPunches: (json['allPunches'] as List<dynamic>? ?? [])
           .map((p) => AttendancePunch.fromJson(p as Map<String, dynamic>))
           .toList(),
-      visitedSiteNames: (json['visitedSiteNames'] as List<dynamic>? ?? []).cast<String>(),
-      workingDuration: Duration(minutes: json['workingDurationMinutes'] as int? ?? 0),
+      visitedSiteNames: parseSites(),
+      workingDuration: Duration(minutes: durationMinutes),
       status: AttendanceStatus.values.firstWhere(
         (s) => s.name == json['status'],
         orElse: () => AttendanceStatus.absent,

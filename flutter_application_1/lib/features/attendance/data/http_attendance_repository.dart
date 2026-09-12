@@ -10,18 +10,23 @@ import 'attendance_repository.dart';
 
 class HttpAttendanceRepository implements AttendanceRepository {
   final ApiClient _apiClient = ApiClient();
+  final CentralAttendanceRepository _fallback = CentralAttendanceRepository();
 
   @override
   Future<List<AttendancePunch>> getAllPunches() async {
     try {
       final response = await _apiClient.get(ApiEndpoints.allPunches);
-      if (response is List) {
-        return response.map((json) => AttendancePunch.fromJson(json as Map<String, dynamic>)).toList();
+      if (response is List && response.isNotEmpty) {
+        final serverPunches = response.map((json) => AttendancePunch.fromJson(json as Map<String, dynamic>)).toList();
+        final localPunches = await _fallback.getAllPunches();
+        // Merge without duplicates
+        final ids = serverPunches.map((p) => p.id).toSet();
+        return [...serverPunches, ...localPunches.where((p) => !ids.contains(p.id))];
       }
-      return [];
+      return _fallback.getAllPunches();
     } catch (e) {
-      debugPrint('[HttpAttendanceRepo] Error fetching punches: $e');
-      return [];
+      debugPrint('[HttpAttendanceRepo] Error fetching punches, using fallback: $e');
+      return _fallback.getAllPunches();
     }
   }
 
@@ -43,7 +48,7 @@ class HttpAttendanceRepository implements AttendanceRepository {
       }
 
       final response = await _apiClient.get(ApiEndpoints.dailyAttendance, queryParams: queryParams.isNotEmpty ? queryParams : null);
-      if (response is List) {
+      if (response is List && response.isNotEmpty) {
         var list = response.map((json) => DailyAttendance.fromJson(json as Map<String, dynamic>)).toList();
         if (status != null) {
           list = list.where((d) => d.status == status).toList();
@@ -51,12 +56,39 @@ class HttpAttendanceRepository implements AttendanceRepository {
         if (sourceType != null) {
           list = list.where((d) => d.sourceType == sourceType).toList();
         }
+        final fallbackList = await _fallback.getDailyAttendanceList(
+          date: date,
+          employeeId: employeeId,
+          department: department,
+          status: status,
+          sourceType: sourceType,
+        );
+        final existingKeys = list.map((d) => '${d.employeeId}_${d.date.year}_${d.date.month}_${d.date.day}').toSet();
+        for (final fb in fallbackList) {
+          final k = '${fb.employeeId}_${fb.date.year}_${fb.date.month}_${fb.date.day}';
+          if (!existingKeys.contains(k)) {
+            list.add(fb);
+          }
+        }
+        list.sort((a, b) => b.date.compareTo(a.date));
         return list;
       }
-      return [];
+      return _fallback.getDailyAttendanceList(
+        date: date,
+        employeeId: employeeId,
+        department: department,
+        status: status,
+        sourceType: sourceType,
+      );
     } catch (e) {
-      debugPrint('[HttpAttendanceRepo] Error fetching daily attendance: $e');
-      return [];
+      debugPrint('[HttpAttendanceRepo] Error fetching daily attendance, using fallback: $e');
+      return _fallback.getDailyAttendanceList(
+        date: date,
+        employeeId: employeeId,
+        department: department,
+        status: status,
+        sourceType: sourceType,
+      );
     }
   }
 
@@ -71,10 +103,15 @@ class HttpAttendanceRepository implements AttendanceRepository {
       if (response is Map<String, dynamic>) {
         return DailyAttendance.fromJson(response);
       }
-      return null;
+      if (response is List) {
+        final list = response.map((json) => DailyAttendance.fromJson(json as Map<String, dynamic>)).toList();
+        final found = list.where((d) => d.date.year == date.year && d.date.month == date.month && d.date.day == date.day).firstOrNull;
+        if (found != null) return found;
+      }
+      return _fallback.getDailyAttendanceForEmployee(employeeId, date);
     } catch (e) {
       debugPrint('[HttpAttendanceRepo] Error fetching daily record for employee ($employeeId): $e');
-      return null;
+      return _fallback.getDailyAttendanceForEmployee(employeeId, date);
     }
   }
 
@@ -89,6 +126,18 @@ class HttpAttendanceRepository implements AttendanceRepository {
     required double distanceMeters,
     bool isOfflineQueued = false,
   }) async {
+    // Record to local fallback first for guaranteed zero-latency local availability
+    final localPunch = await _fallback.recordMobilePunch(
+      employeeId: employeeId,
+      type: type,
+      site: site,
+      latitude: latitude,
+      longitude: longitude,
+      accuracy: accuracy,
+      distanceMeters: distanceMeters,
+      isOfflineQueued: isOfflineQueued,
+    );
+
     try {
       final body = {
         'employeeId': employeeId,
@@ -105,10 +154,10 @@ class HttpAttendanceRepository implements AttendanceRepository {
       if (response is Map<String, dynamic>) {
         return AttendancePunch.fromJson(response);
       }
-      throw ApiException('Unexpected response when recording punch.');
+      return localPunch;
     } catch (e) {
-      debugPrint('[HttpAttendanceRepo] Error recording mobile punch: $e');
-      rethrow;
+      debugPrint('[HttpAttendanceRepo] Network error recording mobile punch (saved locally): $e');
+      return localPunch;
     }
   }
 

@@ -61,7 +61,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         final stringRows = rows.map((r) => r.map((c) => c?.toString() ?? '').toList()).toList();
         await ReportExportService.printOrExportPdf(
           title: title,
-          subtitle: 'Official Workforce Attendance & Audit Dataset (${DateFormat('dd/MM/yyyy').format(_fromDate)} - ${DateFormat('dd/MM/yyyy').format(_toDate)})',
+          subtitle: 'Official Attendance & Audit Dataset (${DateFormat('dd/MM/yyyy').format(_fromDate)} - ${DateFormat('dd/MM/yyyy').format(_toDate)})',
           headers: headers,
           rows: stringRows,
         );
@@ -91,8 +91,8 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       body: Column(
         children: [
           AppHeader(
-            title: 'Visual Reports & Compliance',
-            subtitle: '15 Enterprise audit categories with multi-format export (CSV, Excel, PDF)',
+            title: 'Reports & Compliance',
+            subtitle: 'audit categries',
             trailing: Wrap(
               spacing: 6,
               runSpacing: 6,

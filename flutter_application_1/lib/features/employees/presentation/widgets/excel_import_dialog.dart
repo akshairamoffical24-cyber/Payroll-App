@@ -29,27 +29,28 @@ class _ExcelImportDialogState extends ConsumerState<ExcelImportDialog> {
 
   Future<void> _pickExcelFile() async {
     try {
-      FilePickerResult? result;
+      List<PlatformFile> files = [];
       try {
-        result = await FilePicker.platform.pickFiles(
+        files = await FilePicker.pickFiles(
           type: FileType.custom,
           allowedExtensions: ['xlsx', 'xls'],
           withData: true,
         );
       } catch (customErr) {
         debugPrint('[FilePicker Custom Error, trying FileType.any] $customErr');
-        result = await FilePicker.platform.pickFiles(
+        files = await FilePicker.pickFiles(
           type: FileType.any,
           withData: true,
         );
       }
 
-      if (result != null && result.files.isNotEmpty) {
-        final file = result.files.first;
-        if (file.bytes != null) {
+      if (files.isNotEmpty) {
+        final file = files.first;
+        final bytes = await file.readAsBytes();
+        if (bytes.isNotEmpty) {
           setState(() {
             _fileName = file.name;
-            _fileBytes = file.bytes;
+            _fileBytes = bytes;
           });
           await _runValidation();
         } else {

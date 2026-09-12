@@ -212,57 +212,65 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
           const Divider(height: 1),
 
           // User Profile & Quick Role Switcher Footer
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: AppColors.primary.withOpacity(0.2),
-                  child: Text(
-                    user?.name.substring(0, 1).toUpperCase() ?? 'U',
-                    style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.primary),
-                  ),
-                ),
-                if (!isCollapsed) ...[
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          user?.name ?? 'User',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                          ),
-                        ),
-                        Text(
-                          user?.email ?? '',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                          ),
-                        ),
-                      ],
+          Builder(
+            builder: (context) {
+              final rawName = user?.name ?? 'Premkumar';
+              final effectiveName = (rawName.toLowerCase().contains('alexander') || rawName.isEmpty) ? 'Premkumar' : rawName;
+              final initial = effectiveName.isNotEmpty ? effectiveName.substring(0, 1).toUpperCase() : 'P';
+
+              return Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 18,
+                      backgroundColor: AppColors.primary.withOpacity(0.2),
+                      child: Text(
+                        initial,
+                        style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.primary),
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.logout_rounded, size: 18, color: AppColors.absent),
-                    tooltip: 'Sign Out',
-                    onPressed: () {
-                      ref.read(authStateProvider.notifier).logout();
-                      widget.onNavigate('/login');
-                    },
-                  ),
-                ],
-              ],
-            ),
+                    if (!isCollapsed) ...[
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              effectiveName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                              ),
+                            ),
+                            Text(
+                              user?.email ?? '',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.logout_rounded, size: 18, color: AppColors.absent),
+                        tooltip: 'Sign Out',
+                        onPressed: () {
+                          ref.read(authStateProvider.notifier).logout();
+                          widget.onNavigate('/login');
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            },
           ),
         ],
       ),

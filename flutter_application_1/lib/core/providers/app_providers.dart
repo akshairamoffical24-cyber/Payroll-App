@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/attendance/data/attendance_repository.dart';
+import '../../features/attendance/data/http_leave_repository.dart';
 import '../../features/attendance/data/http_regularization_repository.dart';
 import '../../features/audit_logs/data/audit_repository.dart';
 import '../../features/authentication/data/auth_repository.dart';
@@ -16,6 +17,7 @@ import '../../shared/models/audit_log.dart';
 import '../../shared/models/daily_attendance.dart';
 import '../../shared/models/employee.dart';
 import '../../shared/models/employee_site_mapping.dart';
+import '../../shared/models/leave_request.dart';
 import '../../shared/models/regularization_request.dart';
 import '../../shared/models/site.dart';
 import '../../features/attendance/data/http_attendance_repository.dart';
@@ -61,6 +63,10 @@ final attendanceRepositoryProvider = Provider<AttendanceRepository>((ref) {
 
 final regularizationRepositoryProvider = Provider<RegularizationRepository>((ref) {
   return HttpRegularizationRepository();
+});
+
+final leaveRepositoryProvider = Provider<LeaveRepository>((ref) {
+  return HttpLeaveRepository();
 });
 
 final payrollRepositoryProvider = Provider<PayrollRepository>((ref) {
@@ -163,6 +169,14 @@ class AuthStateNotifier extends StateNotifier<User?> {
   Future<void> loginWithOtp({required String mobile, required String otp}) async {
     final user = await _authRepo.loginWithOtp(mobile: mobile, otp: otp);
     state = user;
+  }
+
+  void updateUserName(String newName) {
+    if (state != null) {
+      final updated = state!.copyWith(name: newName.trim());
+      state = updated;
+      _authRepo.updateLocalUser(updated);
+    }
   }
 
   Future<void> logout() async {
@@ -321,4 +335,58 @@ final regularizationRequestsProvider =
     StateNotifierProvider<RegularizationRequestsNotifier, List<RegularizationRequest>>((ref) {
   final repo = ref.watch(regularizationRepositoryProvider);
   return RegularizationRequestsNotifier(repo);
+});
+
+// Employee-Specific Leaves & Regularizations Family Providers
+final employeeLeavesProvider =
+    FutureProvider.family.autoDispose<List<LeaveRequest>, String>((ref, employeeId) async {
+  if (employeeId.isEmpty) return [];
+  final repo = ref.watch(leaveRepositoryProvider);
+  return repo.getLeavesForEmployee(employeeId);
+});
+
+final employeeRegularizationsProvider =
+    FutureProvider.family.autoDispose<List<RegularizationRequest>, String>((ref, employeeId) async {
+  if (employeeId.isEmpty) return [];
+  final repo = ref.watch(regularizationRepositoryProvider);
+  return repo.getRequestsForEmployee(employeeId);
+});
+
+class LeaveRequestsNotifier extends StateNotifier<List<LeaveRequest>> {
+  final LeaveRepository _repo;
+
+  LeaveRequestsNotifier(this._repo) : super([]) {
+    loadRequests();
+  }
+
+  Future<void> loadRequests() async {
+    try {
+      final list = await _repo.getAllLeaves();
+      state = list;
+    } catch (_) {}
+  }
+
+  Future<LeaveRequest> addLeave({
+    required String employeeId,
+    required String leaveType,
+    required DateTime startDate,
+    required DateTime endDate,
+    String? reason,
+  }) async {
+    final created = await _repo.submitLeaveRequest(
+      employeeId: employeeId,
+      leaveType: leaveType,
+      startDate: startDate,
+      endDate: endDate,
+      reason: reason,
+    );
+    state = [created, ...state];
+    return created;
+  }
+}
+
+final leaveRequestsProvider =
+    StateNotifierProvider<LeaveRequestsNotifier, List<LeaveRequest>>((ref) {
+  final repo = ref.watch(leaveRepositoryProvider);
+  return LeaveRequestsNotifier(repo);
 });

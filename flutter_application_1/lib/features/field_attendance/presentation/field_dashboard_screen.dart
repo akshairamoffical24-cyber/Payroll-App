@@ -3,15 +3,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import '../../../core/constants/app_colors.dart';
 import '../../../core/providers/app_providers.dart';
-import '../../../core/theme/aurora_background.dart';
-import '../../../core/theme/glassmorphic_container.dart';
+import '../../../shared/models/attendance_punch.dart';
+import '../../../shared/models/daily_attendance.dart';
 import '../../../shared/models/employee.dart';
+import '../../../shared/models/employee_site_mapping.dart';
+import '../../../shared/models/leave_request.dart';
 import '../../../shared/models/regularization_request.dart';
 import '../../../shared/models/site.dart';
-import '../../employees/data/employee_repository.dart';
-import '../../face_registration/data/face_registration_repository.dart';
+import '../../../shared/models/user.dart';
 import '../../face_registration/presentation/face_registration_screen.dart';
 import '../../notifications/presentation/notification_drawer.dart';
 
@@ -23,1547 +23,1838 @@ class FieldDashboardScreen extends ConsumerStatefulWidget {
 }
 
 class _FieldDashboardScreenState extends ConsumerState<FieldDashboardScreen> {
-  int _currentTab = 0; // 0: Home, 1: Approvals, 2: Log, 3: Settings
-  bool _showingProfileSubscreen = false;
-
-  late Timer _timer;
+  int _currentTab = 0; // 0: Home, 1: Attendance, 2: Requests, 3: Profile
+  late Timer _clockTimer;
   DateTime _currentTime = DateTime.now();
-  DateTime _selectedMonth = DateTime(2026, 8, 1);
-  bool _isPunchedIn = true;
-  String _todayPunchInTime = '09:15 AM';
-  String _todayPunchOutTime = '--:--';
-  bool _isRefreshingLocation = false;
+  late DateTime _selectedMonth;
 
-  // Notification toggles
-  bool _punchReminders = true;
-  bool _geofenceAlerts = true;
-  bool _approvalAlerts = true;
-
-  // Mock approval requests list
-  final List<Map<String, dynamic>> _requests = [
-    {
-      'title': 'Casual Leave',
-      'type': 'Leave',
-      'dates': '24 Aug - 25 Aug 2026',
-      'reason': 'Personal errands & family event',
-      'status': 'Approved',
-      'statusColor': AppColors.present,
-      'approver': 'Sarah Jenkins (HR)',
-      'appliedOn': '22 Aug 2026',
-    },
-    {
-      'title': 'Missed OUT Punch',
-      'type': 'Attendance',
-      'dates': '20 Aug 2026 (06:30 PM)',
-      'reason': 'Device network glitch during checkout at CTS Campus',
-      'status': 'Pending',
-      'statusColor': AppColors.late,
-      'approver': 'R Gayathri (Manager)',
-      'appliedOn': '21 Aug 2026',
-    },
-    {
-      'title': 'On Duty - Client Visit',
-      'type': 'Attendance',
-      'dates': '18 Aug 2026',
-      'reason': 'Client site review at WTC Perungudi',
-      'status': 'Approved',
-      'statusColor': AppColors.present,
-      'approver': 'Sarah Jenkins (HR)',
-      'appliedOn': '17 Aug 2026',
-    },
-  ];
+  // Requests sub-tab (0: Leave Requests, 1: Late Attendance Requests)
+  int _requestsSubTab = 0;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _currentTime = DateTime.now());
     });
   }
 
   @override
   void dispose() {
-    _timer.cancel();
+    _clockTimer.cancel();
     super.dispose();
   }
 
-  Employee _getEmployeeDetails(String? employeeId, String? email, String? name, List<Employee> liveEmployees, String? department) {
-    final searchPool = [...liveEmployees, ...MockEmployeeRepository.seedEmployees];
-    final emp = searchPool.where((e) {
-      final codeNorm = e.code.toLowerCase().replaceAll('-', '').replaceAll(' ', '');
-      final idNorm = e.id.toLowerCase().replaceAll('-', '').replaceAll(' ', '');
-      final inputId = (employeeId ?? '').toLowerCase().replaceAll('-', '').replaceAll(' ', '');
+  Employee _resolveEmployee(User? user, List<Employee> liveEmployees) {
+    final empId = user?.employeeId;
+    final email = user?.email;
+    final name = user?.name;
+    final code = user?.employeeCode ?? user?.username;
+
+    final emp = liveEmployees.where((e) {
+      final codeNorm = e.code.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+      final idNorm = e.id.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+      final inputId = (empId ?? '').toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+      final inputCode = (code ?? '').toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
       final inputEmail = (email ?? '').toLowerCase().trim();
-      return (inputEmail.isNotEmpty && e.email.toLowerCase().trim() == inputEmail) ||
+      final eEmail = e.email.toLowerCase().trim();
+
+      return (inputEmail.isNotEmpty && eEmail == inputEmail) ||
           (inputId.isNotEmpty && (codeNorm == inputId || idNorm == inputId)) ||
-          (name != null && name.isNotEmpty && e.name.toLowerCase() == name.toLowerCase());
+          (inputCode.isNotEmpty && (codeNorm == inputCode || idNorm == inputCode));
     }).firstOrNull;
 
     if (emp != null) return emp;
 
-    // Dynamically build user profile from authenticated session
     return Employee(
-      id: employeeId ?? 'EMP-001',
-      code: employeeId ?? 'EMP001',
-      name: (name != null && name.isNotEmpty) ? name : 'Field Staff Member',
-      department: (department != null && department.isNotEmpty) ? department : 'FIELD OPERATIONS',
-      designation: 'Field Staff Specialist',
+      id: empId ?? user?.id ?? 'EMP-001',
+      code: code ?? empId ?? 'EMP001',
+      name: (name != null && name.trim().isNotEmpty) ? name.trim() : 'Field Employee',
+      department: (user?.department != null && user!.department!.trim().isNotEmpty)
+          ? user.department!.trim()
+          : 'Operations',
+      designation: (user?.designation != null && user!.designation!.trim().isNotEmpty)
+          ? user.designation!.trim()
+          : 'Site Staff',
       type: EmployeeType.field,
-      phone: '9876543210',
-      email: (email != null && email.isNotEmpty) ? email : 'field@workpulse.com',
+      phone: (user?.phone != null && user!.phone!.trim().isNotEmpty) ? user.phone!.trim() : '',
+      email: (email != null && email.trim().isNotEmpty) ? email.trim() : 'employee@workpulse.io',
       status: EmployeeStatus.active,
       joiningDate: DateTime(2026, 1, 1),
-      workLocation: 'Assigned Client Project Sites',
-      monthlyCtc: 45000.0,
-      annualCtc: 540000.0,
+      workLocation: 'Assigned Project Site',
+      monthlyCtc: user?.monthlyCtc ?? 20000.0,
+      annualCtc: (user?.monthlyCtc ?? 20000.0) * 12,
     );
   }
 
-  void _handlePunchAction(Employee emp) {
+  Site? _resolveAssignedSite(
+    Employee emp,
+    List<EmployeeSiteMapping> mappings,
+    List<Site> sites,
+  ) {
+    final empIdNorm = emp.id.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+    final empCodeNorm = emp.code.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+
+    final activeMapping = mappings.where((m) {
+      final mIdNorm = m.employeeId.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+      return (mIdNorm == empIdNorm || mIdNorm == empCodeNorm) && m.status == MappingStatus.active;
+    }).firstOrNull;
+
+    if (activeMapping == null) {
+      // If no explicit mapping, fallback to first available active site if single site exists
+      return null;
+    }
+
+    return sites.where((s) => s.id == activeMapping.siteId).firstOrNull;
+  }
+
+  Map<String, dynamic> _computeTodayAttendance(
+    Employee emp,
+    List<DailyAttendance> allDaily,
+    List<AttendancePunch> allPunches,
+  ) {
+    final now = _currentTime;
+    final today = DateTime(now.year, now.month, now.day);
+
+    final empNormId = emp.id.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+    final empNormCode = emp.code.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+
+    bool isEmpMatch(String id) {
+      final norm = id.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+      return norm == empNormId || norm == empNormCode || (empNormCode.isNotEmpty && norm.contains(empNormCode));
+    }
+
+    final todayRecord = allDaily.where((d) =>
+        isEmpMatch(d.employeeId) &&
+        d.date.year == today.year &&
+        d.date.month == today.month &&
+        d.date.day == today.day
+    ).firstOrNull;
+
+    final todayPunches = allPunches.where((p) =>
+        isEmpMatch(p.employeeId) &&
+        p.timestamp.year == today.year &&
+        p.timestamp.month == today.month &&
+        p.timestamp.day == today.day
+    ).toList()..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    final inPunch = todayRecord?.firstPunch ??
+        todayPunches.where((p) => p.type == PunchType.inPunch).firstOrNull;
+    final outPunch = todayRecord?.lastPunch ??
+        todayPunches.where((p) => p.type == PunchType.outPunch).lastOrNull;
+
+    final hasPunchedIn = inPunch != null || (todayRecord != null && todayRecord.status != AttendanceStatus.absent);
+    final hasPunchedOut = outPunch != null;
+
+    final punchInStr = inPunch != null
+        ? DateFormat('hh:mm a').format(inPunch.timestamp)
+        : (hasPunchedIn ? '09:00 AM' : '--:--');
+
+    final punchOutStr = outPunch != null
+        ? DateFormat('hh:mm a').format(outPunch.timestamp)
+        : (hasPunchedOut ? '06:00 PM' : '--:--');
+
+    String totalHrsStr = '--';
+    if (todayRecord != null && todayRecord.workingDuration.inMinutes > 0) {
+      final hours = todayRecord.workingDuration.inMinutes ~/ 60;
+      final mins = todayRecord.workingDuration.inMinutes % 60;
+      totalHrsStr = '$hours.${mins.toString().padLeft(2, '0')}';
+    } else if (inPunch != null && outPunch != null) {
+      final diff = outPunch.timestamp.difference(inPunch.timestamp);
+      final h = diff.inHours;
+      final m = diff.inMinutes % 60;
+      totalHrsStr = '$h.${m.toString().padLeft(2, '0')}';
+    } else if (inPunch != null) {
+      final diff = now.difference(inPunch.timestamp);
+      if (diff.inMinutes > 0) {
+        final h = diff.inHours;
+        final m = diff.inMinutes % 60;
+        totalHrsStr = '$h.${m.toString().padLeft(2, '0')}';
+      } else {
+        totalHrsStr = '0.00';
+      }
+    }
+
+    String statusLabel = 'NOT MARKED';
+    Color statusColor = const Color(0xFF64748B);
+
+    if (todayRecord != null) {
+      switch (todayRecord.status) {
+        case AttendanceStatus.present:
+          statusLabel = 'PRESENT';
+          statusColor = const Color(0xFF10B981);
+          break;
+        case AttendanceStatus.late:
+          statusLabel = 'LATE';
+          statusColor = const Color(0xFFF59E0B);
+          break;
+        case AttendanceStatus.leave:
+          statusLabel = 'ON LEAVE';
+          statusColor = const Color(0xFF8B5CF6);
+          break;
+        case AttendanceStatus.halfDay:
+          statusLabel = 'HALF DAY';
+          statusColor = const Color(0xFF06B6D4);
+          break;
+        case AttendanceStatus.absent:
+          statusLabel = 'ABSENT';
+          statusColor = const Color(0xFFEF4444);
+          break;
+        default:
+          statusLabel = 'COMPLETED';
+          statusColor = const Color(0xFF10B981);
+      }
+    } else if (hasPunchedIn) {
+      statusLabel = inPunch != null && inPunch.timestamp.hour >= 10 ? 'LATE' : 'PRESENT';
+      statusColor = statusLabel == 'LATE' ? const Color(0xFFF59E0B) : const Color(0xFF10B981);
+    }
+
+    return {
+      'hasPunchedIn': hasPunchedIn,
+      'hasPunchedOut': hasPunchedOut,
+      'punchIn': punchInStr,
+      'punchOut': punchOutStr,
+      'totalHrs': totalHrsStr,
+      'statusLabel': statusLabel,
+      'statusColor': statusColor,
+    };
+  }
+
+  Future<void> _refreshAllData() async {
+    ref.invalidate(dailyAttendanceListProvider);
+    ref.invalidate(allPunchesProvider);
+    ref.invalidate(mappingsListProvider);
+    ref.invalidate(sitesListProvider);
+    ref.invalidate(employeesListProvider);
+    ref.invalidate(notificationsListProvider);
+    ref.invalidate(systemSettingsProvider);
+    ref.invalidate(leaveRequestsProvider);
+    ref.invalidate(regularizationRequestsProvider);
+    await Future.delayed(const Duration(milliseconds: 600));
+  }
+
+  void _triggerPunchAction(bool isPunchOut, Employee emp) {
     context.push(
       '/field-verification',
       extra: {
-        'isPunchOut': _isPunchedIn,
+        'isPunchOut': isPunchOut,
         'employeeId': emp.id,
       },
     ).then((_) {
-      setState(() {
-        _isPunchedIn = !_isPunchedIn;
-        if (!_isPunchedIn) {
-          _todayPunchOutTime = DateFormat('hh:mm a').format(DateTime.now());
-        } else {
-          _todayPunchInTime = DateFormat('hh:mm a').format(DateTime.now());
-        }
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_isPunchedIn ? 'Punch In recorded successfully!' : 'Punch Out recorded successfully!'),
-          backgroundColor: AppColors.present,
-        ),
-      );
+      _refreshAllData();
+      if (mounted) setState(() {});
     });
+  }
+
+  void _openFaceRegistration(Employee emp) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FaceRegistrationScreen(
+          employeeId: emp.id,
+          employeeName: emp.name,
+          onCompleted: () {
+            _refreshAllData();
+          },
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = ref.watch(authStateProvider);
-    final employeesAsync = ref.watch(employeesListProvider);
-    final liveEmployees = employeesAsync.maybeWhen(
-      data: (list) => list,
-      orElse: () => <Employee>[],
-    );
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final emp = _getEmployeeDetails(user?.employeeId, user?.email, user?.name, liveEmployees, user?.department);
 
-    if (_showingProfileSubscreen) {
-      return Scaffold(
-        body: AuroraBackground(
-          child: SafeArea(
-            child: _buildProfileScreen(context, emp, isDark),
-          ),
-        ),
-      );
-    }
+    final user = ref.watch(authStateProvider);
+    final liveEmployees = ref.watch(employeesListProvider).value ?? [];
+    final allMappings = ref.watch(mappingsListProvider).value ?? [];
+    final allSites = ref.watch(sitesListProvider).value ?? [];
+    final allDaily = ref.watch(dailyAttendanceListProvider).value ?? [];
+    final allPunches = ref.watch(allPunchesProvider).value ?? [];
+    final notifications = ref.watch(notificationsListProvider).value ?? [];
+    final systemSettings = ref.watch(systemSettingsProvider).value;
+
+    final emp = _resolveEmployee(user, liveEmployees);
+    final assignedSite = _resolveAssignedSite(emp, allMappings, allSites);
+    final todayData = _computeTodayAttendance(emp, allDaily, allPunches);
+
+    final unreadNotifs = notifications.where((n) => !n.isRead).length;
+    final companyName = systemSettings?.companyName ?? 'Freelance Conscom';
 
     return Scaffold(
-      drawer: _buildAppDrawer(context, emp, isDark),
-      body: AuroraBackground(
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: BoxDecoration(
+          gradient: isDark
+              ? const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFF0F172A),
+                    Color(0xFF1E1B4B),
+                    Color(0xFF0F172A),
+                  ],
+                )
+              : const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFFE0F2FE), // very light cyan / blue
+                    Color(0xFFEDE9FE), // soft lavender
+                    Color(0xFFFCE7F3), // soft pink / purple
+                  ],
+                ),
+        ),
         child: SafeArea(
-          child: Column(
-            children: [
-              // Top WorkPulse Header
-              _buildTopAppBar(context, emp, isDark),
-
-              // Main Tab Content
-              Expanded(
-                child: IndexedStack(
-                  index: _currentTab,
-                  children: [
-                    _buildHomeTab(context, emp, isDark),
-                    _buildApprovalsTab(context, emp, isDark),
-                    _buildLogTab(context, emp, isDark),
-                    _buildSettingsTab(context, emp, isDark),
-                  ],
-                ),
-              ),
-
-              // Bottom Curved Navigation Bar
-              _buildCurvedBottomNav(isDark, emp),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // --- Top App Bar ---
-  Widget _buildTopAppBar(BuildContext context, Employee emp, bool isDark) {
-    String title = 'WORKPULSE';
-    if (_currentTab == 1) title = 'Approvals';
-    if (_currentTab == 2) title = 'My Attendance Log';
-    if (_currentTab == 3) title = 'Settings';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        gradient: AppColors.primaryGradient,
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.primary.withOpacity(0.35),
-            blurRadius: 12,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Builder(
-            builder: (ctx) => IconButton(
-              icon: const Icon(Icons.menu_rounded, color: Colors.white, size: 24),
-              onPressed: () => Scaffold.of(ctx).openDrawer(),
-              tooltip: 'Navigation Menu',
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              title,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.notifications_outlined, color: Colors.white, size: 22),
-            tooltip: 'Notifications',
-            onPressed: () => _showNotificationsBottomSheet(context, isDark),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Tab 0: Home Tab ---
-  Widget _buildHomeTab(BuildContext context, Employee emp, bool isDark) {
-    final mappingsAsync = ref.watch(mappingsListProvider);
-    final sitesAsync = ref.watch(sitesListProvider);
-    final allRequests = ref.watch(regularizationRequestsProvider);
-
-    // Find any regularization request for this employee
-    final empRequests = allRequests.where((r) {
-      final codeNorm = r.employeeCode.toLowerCase().replaceAll('-', '');
-      final myCodeNorm = emp.code.toLowerCase().replaceAll('-', '');
-      final idNorm = r.employeeId.toLowerCase().replaceAll('-', '');
-      final myIdNorm = emp.id.toLowerCase().replaceAll('-', '');
-      return codeNorm == myCodeNorm ||
-          idNorm == myIdNorm ||
-          r.employeeName.toLowerCase().contains(emp.name.toLowerCase()) ||
-          emp.name.toLowerCase().contains(r.employeeName.toLowerCase());
-    }).toList();
-
-    RegularizationRequest? latestApproved;
-    RegularizationRequest? latestPending;
-    for (final r in empRequests) {
-      if (r.status.isApproved && latestApproved == null) latestApproved = r;
-      if (r.status.isPending && latestPending == null) latestPending = r;
-    }
-
-    final mappedSiteIds = mappingsAsync.maybeWhen(
-      data: (list) => list
-          .where((m) => m.employeeId == emp.id && m.isCurrentlyValid())
-          .map((m) => m.siteId)
-          .toList(),
-      orElse: () => ['SITE-001'],
-    );
-
-    final targetSite = sitesAsync.maybeWhen(
-      data: (list) => list.firstWhere(
-        (s) => mappedSiteIds.contains(s.id),
-        orElse: () => list.first,
-      ),
-      orElse: () => const Site(
-        id: 'SITE-001',
-        code: 'SITE001',
-        name: 'CTS Chennai Campus',
-        client: 'WorkPulse Enterprise',
-        project: 'Campus Infrastructure',
-        address: '5/535, Old Mahabalipuram Rd, Thoraipakkam, Chennai - 600097',
-        latitude: 12.9463,
-        longitude: 80.2372,
-        geofenceRadius: 200,
-        poNumber: 'PO-2026-001',
-        siteManagerName: 'Sarah Jenkins',
-        siteEngineerName: 'Alex Morgan',
-        status: SiteStatus.active,
-      ),
-    );
-
-    final effectivePunchIn = latestApproved != null
-        ? latestApproved.requestedInTime
-        : (latestPending != null ? 'Pending (${latestPending.requestedInTime})' : _todayPunchInTime);
-    final effectivePunchOut = latestApproved != null
-        ? latestApproved.requestedOutTime
-        : (latestPending != null ? 'Pending (${latestPending.requestedOutTime})' : _todayPunchOutTime);
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Employee Punch Card
-          GlassmorphicContainer(
-            padding: const EdgeInsets.all(20),
-            borderRadius: 20,
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            emp.name,
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            emp.designation,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    InkWell(
-                      onTap: () => setState(() => _showingProfileSubscreen = true),
-                      borderRadius: BorderRadius.circular(30),
-                      child: Stack(
-                        children: [
-                          CircleAvatar(
-                            radius: 28,
-                            backgroundColor: AppColors.primary.withOpacity(0.2),
-                            child: Text(
-                              emp.name.isNotEmpty ? emp.name[0].toUpperCase() : 'U',
-                              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.primary),
-                            ),
-                          ),
-                          Positioned(
-                            bottom: 0,
-                            right: 0,
-                            child: Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: const BoxDecoration(
-                                color: AppColors.primary,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-
-                // Big Glowing Action Button (Time Out / Time In)
-                SizedBox(
-                  width: double.infinity,
-                  height: 54,
-                  child: ElevatedButton(
-                    onPressed: () => _handlePunchAction(emp),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF59E0B), // Vibrant Amber
-                      foregroundColor: Colors.white,
-                      elevation: 6,
-                      shadowColor: const Color(0xFFF59E0B).withOpacity(0.45),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(_isPunchedIn ? Icons.logout_rounded : Icons.login_rounded, size: 20),
-                        const SizedBox(width: 10),
-                        Text(
-                          _isPunchedIn ? 'Time Out' : 'Time In',
-                          style: const TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Late Punch Status Notice (If Approved or Pending)
-          if (latestApproved != null) ...[
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: AppColors.present.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.present.withOpacity(0.4)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.present.withOpacity(0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.verified_rounded, color: AppColors.present, size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Late Attendance Approved by ${latestApproved.reviewedBy ?? "HR/Admin"}',
-                          style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: AppColors.present),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Punches marked: IN (${latestApproved.requestedInTime}) • OUT (${latestApproved.requestedOutTime}) • ${latestApproved.adminReviewRemarks ?? "Approved"}',
-                          style: TextStyle(fontSize: 11.5, color: isDark ? Colors.grey[300] : Colors.grey[800]),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-          ] else if (latestPending != null) ...[
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF59E0B).withOpacity(0.12),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFF59E0B).withOpacity(0.4)),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF59E0B).withOpacity(0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.hourglass_top_rounded, color: Color(0xFFF59E0B), size: 20),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Late Punch Sent for HR/Admin Review',
-                          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: Color(0xFFF59E0B)),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Requested: IN (${latestPending.requestedInTime}), OUT (${latestPending.requestedOutTime}). Remarks forwarded to HR & Admin.',
-                          style: TextStyle(fontSize: 11.5, color: isDark ? Colors.grey[300] : Colors.grey[800]),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-          ],
-
-          // Your Location Card (Only Displays Mapped Place Name)
-          GlassmorphicContainer(
-            padding: const EdgeInsets.all(18),
-            borderRadius: 20,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.location_on_outlined, color: AppColors.primary, size: 20),
-                        SizedBox(width: 8),
-                        Text(
-                          'Your Location',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                    IconButton(
-                      icon: _isRefreshingLocation
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary),
-                            )
-                          : const Icon(Icons.sync_rounded, color: AppColors.primary, size: 20),
-                      tooltip: 'Refresh Location',
-                      onPressed: () async {
-                        setState(() => _isRefreshingLocation = true);
-                        await Future.delayed(const Duration(milliseconds: 500));
-                        if (mounted) {
-                          setState(() => _isRefreshingLocation = false);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Location refreshed: ${targetSite.name}')),
-                          );
-                        }
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Center(
-                  child: Text(
-                    _isRefreshingLocation
-                        ? 'Fetching location...'
-                        : targetSite.name,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w700,
-                      color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Today's Work Summary Card
-          GlassmorphicContainer(
-            padding: const EdgeInsets.all(18),
-            borderRadius: 20,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Today\'s Activity • ${DateFormat('dd MMMM yyyy').format(_currentTime)}',
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _buildSummaryItem('PUNCH IN', effectivePunchIn, AppColors.present, isDark),
-                    _buildSummaryItem('PUNCH OUT', effectivePunchOut, const Color(0xFFF59E0B), isDark),
-                    _buildSummaryItem('TOTAL HOURS', '08:35 hrs', AppColors.primary, isDark),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSummaryItem(String label, String value, Color color, bool isDark) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: color),
-        ),
-      ],
-    );
-  }
-
-  // --- Tab 1: Approvals Tab ---
-  Widget _buildApprovalsTab(BuildContext context, Employee emp, bool isDark) {
-    final liveRequests = ref.watch(regularizationRequestsProvider);
-    final empLiveRequests = liveRequests.where((r) {
-      final codeNorm = r.employeeCode.toLowerCase().replaceAll('-', '');
-      final myCodeNorm = emp.code.toLowerCase().replaceAll('-', '');
-      final idNorm = r.employeeId.toLowerCase().replaceAll('-', '');
-      final myIdNorm = emp.id.toLowerCase().replaceAll('-', '');
-      return codeNorm == myCodeNorm ||
-          idNorm == myIdNorm ||
-          r.employeeName.toLowerCase().contains(emp.name.toLowerCase()) ||
-          emp.name.toLowerCase().contains(r.employeeName.toLowerCase());
-    }).toList();
-
-    // Map live provider requests into list items
-    final dynamicList = <Map<String, dynamic>>[
-      ...empLiveRequests.map((r) {
-        Color statusColor = const Color(0xFFF59E0B);
-        if (r.status.isApproved) statusColor = AppColors.present;
-        if (r.status.isRejected) statusColor = AppColors.absent;
-
-        return {
-          'title': r.requestType,
-          'type': r.reasonCategory,
-          'dates': '${DateFormat('dd MMM yyyy').format(r.attendanceDate)} (${r.requestedInTime} - ${r.requestedOutTime})',
-          'reason': r.remarks,
-          'status': r.status.isApproved
-              ? 'Approved (Marked)'
-              : (r.status.isRejected ? 'Rejected' : 'Pending HR/Admin Review'),
-          'statusColor': statusColor,
-          'approver': r.reviewedBy ?? 'Sarah Jenkins (HR) & Admin',
-          'appliedOn': DateFormat('dd MMM yyyy').format(r.appliedAt),
-        };
-      }),
-      ..._requests,
-    ];
-
-    return Stack(
-      children: [
-        ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _buildApprovalOptionCard(
-              icon: Icons.directions_walk_rounded,
-              title: 'Leave',
-              subtitle: 'Casual: 4 | Sick: 6 | Earned: 12 available',
-              isDark: isDark,
-              onTap: () => _showLeaveBalanceModal(context, isDark),
-            ),
-            const SizedBox(height: 12),
-            _buildApprovalOptionCard(
-              icon: Icons.event_available_rounded,
-              title: 'Attendance',
-              subtitle: 'Regularization & missed punches',
-              isDark: isDark,
-              onTap: () => _showAttendanceRegularizationModal(context, isDark),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Recent Requests',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                  ),
-                ),
-                Text(
-                  '${dynamicList.length} Total',
-                  style: const TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            ...dynamicList.map((req) => Container(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  child: InkWell(
-                    onTap: () => _showRequestDetailModal(context, req, isDark),
-                    borderRadius: BorderRadius.circular(14),
-                    child: GlassmorphicContainer(
-                      padding: const EdgeInsets.all(14),
-                      borderRadius: 14,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  req['title'],
-                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  req['dates'],
-                                  style: TextStyle(fontSize: 12, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: (req['statusColor'] as Color).withOpacity(0.15),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: (req['statusColor'] as Color).withOpacity(0.4)),
-                            ),
-                            child: Text(
-                              req['status'],
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w700,
-                                color: req['statusColor'] as Color,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                )),
-            const SizedBox(height: 80),
-          ],
-        ),
-
-        // Floating "+ Request" Button
-        Positioned(
-          bottom: 24,
-          right: 20,
-          child: ElevatedButton.icon(
-            onPressed: () => _showNewRequestDialog(context, isDark),
-            icon: const Icon(Icons.add, color: Colors.white, size: 18),
-            label: const Text(
-              'Request',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFF59E0B),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              elevation: 6,
-              shadowColor: const Color(0xFFF59E0B).withOpacity(0.45),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildApprovalOptionCard({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required bool isDark,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: GlassmorphicContainer(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        borderRadius: 16,
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: AppColors.primary, size: 24),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(fontSize: 12, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // --- Tab 2: Attendance Log Tab (Calendar View) ---
-  Widget _buildLogTab(BuildContext context, Employee emp, bool isDark) {
-    return Stack(
-      children: [
-        SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            children: [
-              // Summary Banner
-              GlassmorphicContainer(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                borderRadius: 14,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        const Text(
-                          'Total Undertime: ',
-                          style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
-                        ),
-                        const Text(
-                          '-05:16 hrs',
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.absent),
-                        ),
-                        const SizedBox(width: 4),
-                        Tooltip(
-                          message: 'Calculated against monthly standard 176 work hours.',
-                          child: Icon(Icons.info_outline_rounded, size: 16, color: Colors.grey[500]),
-                        ),
-                      ],
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.picture_as_pdf_outlined, color: AppColors.primary, size: 22),
-                      tooltip: 'Download Monthly PDF',
-                      onPressed: () => _showPdfExportDialog(context, isDark),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Calendar Card
-              GlassmorphicContainer(
-                padding: const EdgeInsets.all(16),
-                borderRadius: 20,
+          child: RefreshIndicator(
+            onRefresh: _refreshAllData,
+            color: const Color(0xFF6366F1),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 680),
                 child: Column(
                   children: [
-                    // Month Navigation
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.chevron_left_rounded),
-                          onPressed: () {
-                            setState(() {
-                              _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1, 1);
-                            });
-                          },
-                        ),
-                        Text(
-                          DateFormat('MMMM yyyy').format(_selectedMonth),
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.chevron_right_rounded),
-                          onPressed: () {
-                            setState(() {
-                              _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 1);
-                            });
-                          },
-                        ),
-                      ],
+                    // Top App Header
+                    _buildHeader(
+                      emp: emp,
+                      companyName: companyName,
+                      unreadCount: unreadNotifs,
+                      isDark: isDark,
                     ),
-                    const SizedBox(height: 12),
 
-                    // Weekdays Row
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-                          .map((day) => Expanded(
-                                child: Center(
-                                  child: Text(
-                                    day,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700,
-                                      color: isDark ? Colors.grey[400] : Colors.grey[600],
-                                    ),
-                                  ),
-                                ),
-                              ))
-                          .toList(),
+                    // Main Tab Content
+                    Expanded(
+                      child: IndexedStack(
+                        index: _currentTab,
+                        children: [
+                          // Tab 0: Home Dashboard
+                          _buildHomeTab(
+                            emp: emp,
+                            assignedSite: assignedSite,
+                            todayData: todayData,
+                            isDark: isDark,
+                          ),
+
+                          // Tab 1: Attendance History
+                          _buildAttendanceHistoryTab(
+                            emp: emp,
+                            allDaily: allDaily,
+                            allPunches: allPunches,
+                            assignedSite: assignedSite,
+                            isDark: isDark,
+                          ),
+
+                          // Tab 2: Requests (Leave & Late Attendance)
+                          _buildRequestsTab(
+                            emp: emp,
+                            isDark: isDark,
+                          ),
+
+                          // Tab 3: Profile
+                          _buildProfileTab(
+                            emp: emp,
+                            assignedSite: assignedSite,
+                            isDark: isDark,
+                          ),
+                        ],
+                      ),
                     ),
-                    const Divider(height: 20),
-
-                    // Calendar Grid
-                    _buildCalendarGrid(isDark),
                   ],
                 ),
               ),
-              const SizedBox(height: 80),
-            ],
-          ),
-        ),
-
-        // Floating Refresh Button
-        Positioned(
-          bottom: 24,
-          right: 20,
-          child: FloatingActionButton(
-            backgroundColor: const Color(0xFFF59E0B),
-            mini: true,
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Attendance logs synced with WorkPulse cloud server.')),
-              );
-            },
-            child: const Icon(Icons.sync_rounded, color: Colors.white, size: 20),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCalendarGrid(bool isDark) {
-    final daysInMonth = 31;
-    final startWeekday = DateTime(_selectedMonth.year, _selectedMonth.month, 1).weekday % 7;
-
-    List<Widget> cells = [];
-
-    for (int i = 0; i < startWeekday; i++) {
-      cells.add(const SizedBox());
-    }
-
-    for (int day = 1; day <= daysInMonth; day++) {
-      final weekday = (startWeekday + day - 1) % 7;
-      final isSunday = weekday == 0;
-      final isHoliday = (day == 3 || day == 15);
-      final isAbsent = (day == 17 || day == 20);
-      final isHalfDay = (day == 6 || day == 19);
-      final isFuture = day > 24;
-
-      Color bgColor = AppColors.present; // Green (Present)
-      Color textColor = Colors.white;
-
-      if (isFuture) {
-        bgColor = Colors.transparent;
-        textColor = isDark ? Colors.grey[400]! : Colors.grey[700]!;
-      } else if (isSunday) {
-        bgColor = Colors.grey.withOpacity(0.35);
-      } else if (isHoliday) {
-        bgColor = const Color(0xFFF59E0B).withOpacity(0.25);
-      } else if (isAbsent) {
-        bgColor = AppColors.absent;
-      } else if (isHalfDay) {
-        bgColor = const Color(0xFF06B6D4); // Cyan
-      }
-
-      cells.add(
-        InkWell(
-          onTap: isFuture
-              ? null
-              : () => _showDayDetailBottomSheet(day, isHoliday, isAbsent, isHalfDay, isSunday),
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            margin: const EdgeInsets.all(3),
-            decoration: BoxDecoration(
-              color: bgColor,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Center(
-              child: isHoliday
-                  ? const Text('🏖️', style: TextStyle(fontSize: 14))
-                  : Text(
-                      day.toString(),
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: textColor,
-                      ),
-                    ),
             ),
           ),
         ),
-      );
-    }
-
-    return GridView.count(
-      crossAxisCount: 7,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      children: cells,
+      ),
+      bottomNavigationBar: _buildBottomNav(isDark),
     );
   }
 
-  // --- Tab 3: Settings Tab ---
-  Widget _buildSettingsTab(BuildContext context, Employee emp, bool isDark) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _buildSettingsItem(
-          icon: Icons.domain_rounded,
-          title: 'Organization',
-          subtitle: 'WorkPulse Enterprise details',
-          isDark: isDark,
-          onTap: () => _showOrganizationModal(context, isDark),
-        ),
-        const SizedBox(height: 12),
-        _buildSettingsItem(
-          icon: Icons.notifications_outlined,
-          title: 'Notifications',
-          subtitle: 'Alerts & punch reminders',
-          isDark: isDark,
-          onTap: () => _showNotificationSettingsModal(context, isDark),
-        ),
-        const SizedBox(height: 12),
-        _buildSettingsItem(
-          icon: Icons.face_rounded,
-          title: 'Face ID',
-          subtitle: 'Biometric Face ID registration',
-          isDark: isDark,
-          onTap: () => _showFaceIdModal(context, isDark),
-        ),
-        const SizedBox(height: 12),
-        _buildSettingsItem(
-          icon: Icons.person_outline_rounded,
-          title: 'Profile',
-          subtitle: 'View Profile',
-          isDark: isDark,
-          onTap: () {
-            setState(() => _showingProfileSubscreen = true);
-          },
-        ),
-        const SizedBox(height: 24),
-        _buildSettingsItem(
-          icon: Icons.logout_rounded,
-          title: 'Sign Out',
-          subtitle: 'End session and return to login',
-          isDark: isDark,
-          iconColor: AppColors.absent,
-          onTap: () => _confirmSignOut(context),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSettingsItem({
-    required IconData icon,
-    required String title,
-    required String subtitle,
+  // ==========================================
+  // HEADER
+  // ==========================================
+  Widget _buildHeader({
+    required Employee emp,
+    required String companyName,
+    required int unreadCount,
     required bool isDark,
-    required VoidCallback onTap,
-    Color? iconColor,
   }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: GlassmorphicContainer(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-        borderRadius: 16,
-        child: Row(
-          children: [
-            Icon(icon, color: iconColor ?? AppColors.primary, size: 24),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(fontSize: 12, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-          ],
-        ),
-      ),
-    );
-  }
+    final initials = emp.name.trim().isNotEmpty
+        ? emp.name.trim().split(' ').map((s) => s.isNotEmpty ? s[0] : '').take(2).join()
+        : 'EM';
 
-  // --- Subscreen: My Profile ---
-  Widget _buildProfileScreen(BuildContext context, Employee emp, bool isDark) {
-    return Stack(
-      children: [
-        Column(
-          children: [
-            // WorkPulse Gradient Header
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-              decoration: const BoxDecoration(
-                gradient: AppColors.primaryGradient,
-              ),
-              child: Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-                    onPressed: () => setState(() => _showingProfileSubscreen = false),
-                  ),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'My Profile',
-                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
-                  ),
-                ],
-              ),
-            ),
-
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  // Top Avatar Header Card
-                  GlassmorphicContainer(
-                    padding: const EdgeInsets.all(18),
-                    borderRadius: 20,
-                    child: Row(
-                      children: [
-                        Stack(
-                          children: [
-                            CircleAvatar(
-                              radius: 34,
-                              backgroundColor: AppColors.primary.withOpacity(0.2),
-                              child: Text(
-                                emp.name.isNotEmpty ? emp.name[0].toUpperCase() : 'P',
-                                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.primary),
-                              ),
-                            ),
-                            Positioned(
-                              bottom: 0,
-                              right: 0,
-                              child: Container(
-                                padding: const EdgeInsets.all(4),
-                                decoration: const BoxDecoration(
-                                  color: AppColors.primary,
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 13),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                emp.name,
-                                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                emp.designation,
-                                style: TextStyle(fontSize: 13, color: isDark ? Colors.grey[300] : Colors.grey[700]),
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  const Icon(Icons.email_outlined, size: 14, color: AppColors.primary),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
-                                      emp.email,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(fontSize: 12, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Profile Information Details Card
-                  GlassmorphicContainer(
-                    padding: const EdgeInsets.all(18),
-                    borderRadius: 20,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Profile Information',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-                        ),
-                        const Divider(height: 20),
-                        _buildProfileField('Employee Code', emp.code),
-                        _buildProfileField('Full Name', emp.name),
-                        _buildProfileField('Phone', emp.phone),
-                        _buildProfileField('Date of Joining', DateFormat('dd-MMM-yyyy').format(emp.joiningDate)),
-                        _buildProfileField('Division', 'WorkPulse Enterprise'),
-                        _buildProfileField('Role', 'Standard User'),
-                        _buildProfileField('Location', emp.workLocation),
-                        _buildProfileField('Department', emp.department),
-                        _buildProfileField('Designation', emp.designation),
-                        _buildProfileField('Shift', 'Flexi Timing - Office'),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Biometric Face Registration Card
-                  Consumer(
-                    builder: (context, ref, _) {
-                      final faceStatusAsync = ref.watch(faceRegistrationStatusProvider(emp.id));
-                      final faceStatus = faceStatusAsync.valueOrNull;
-                      final isRegistered = faceStatus?.isRegistered ?? (emp.isFaceRegistered ?? false);
-
-                      return GlassmorphicContainer(
-                        padding: const EdgeInsets.all(18),
-                        borderRadius: 20,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Row(
-                                  children: [
-                                    Icon(Icons.face_retouching_natural_rounded, color: AppColors.primary, size: 20),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      'Face Biometrics & Attendance',
-                                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-                                    ),
-                                  ],
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: (isRegistered ? AppColors.present : Colors.amber).withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: (isRegistered ? AppColors.present : Colors.amber).withOpacity(0.4),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    isRegistered ? '✓ Registered' : '⚠ Not Registered',
-                                    style: TextStyle(
-                                      color: isRegistered ? AppColors.present : Colors.amber,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 11,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const Divider(height: 20),
-                            Text(
-                              isRegistered
-                                  ? 'Your face template is active for verified geofenced attendance capture.'
-                                  : 'Register your face to enable mobile biometric clock-in and anti-spoof attendance verification.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isDark ? Colors.grey[300] : Colors.grey[700],
-                                height: 1.4,
-                              ),
-                            ),
-                            if (faceStatus?.registeredAt != null) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                'Registered: ${DateFormat('dd MMM yyyy, hh:mm a').format(faceStatus!.registeredAt!)} (${faceStatus.modelVersion ?? "v1.0"})',
-                                style: TextStyle(fontSize: 11, color: isDark ? Colors.grey[400] : Colors.grey[600]),
-                              ),
-                            ],
-                            const SizedBox(height: 14),
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton.icon(
-                                onPressed: () {
-                                  showDialog(
-                                    context: context,
-                                    builder: (context) => FaceRegistrationScreen(
-                                      employeeId: emp.id,
-                                      employeeName: emp.name,
-                                      onCompleted: () {
-                                        ref.invalidate(faceRegistrationStatusProvider(emp.id));
-                                        ref.invalidate(employeesListProvider);
-                                      },
-                                    ),
-                                  );
-                                },
-                                icon: Icon(
-                                  isRegistered ? Icons.refresh_rounded : Icons.camera_alt_rounded,
-                                  size: 16,
-                                  color: Colors.white,
-                                ),
-                                label: Text(
-                                  isRegistered ? 'Re-register Face' : 'Register Face Now',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: isRegistered ? const Color(0xFF3B82F6) : AppColors.primary,
-                                  padding: const EdgeInsets.symmetric(vertical: 12),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Reporting to Card
-                  GlassmorphicContainer(
-                    padding: const EdgeInsets.all(18),
-                    borderRadius: 20,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Reporting to',
-                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
-                        ),
-                        const Divider(height: 20),
-                        Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 20,
-                              backgroundColor: AppColors.secondary.withOpacity(0.2),
-                              child: const Text('RG', style: TextStyle(color: AppColors.secondary, fontWeight: FontWeight.bold)),
-                            ),
-                            const SizedBox(width: 14),
-                            const Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('R Gayathri', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
-                                SizedBox(height: 2),
-                                Text('(FAG-Head)', style: TextStyle(fontSize: 12, color: Colors.grey)),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 80),
-                ],
-              ),
-            ),
-          ],
-        ),
-
-        // Floating QR Code button
-        Positioned(
-          bottom: 24,
-          right: 20,
-          child: FloatingActionButton(
-            backgroundColor: const Color(0xFFF59E0B),
-            onPressed: () => _showQrCodeModal(context, emp, isDark),
-            child: const Icon(Icons.qr_code_2_rounded, color: Colors.white, size: 28),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildProfileField(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w500)),
-          Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-        ],
-      ),
-    );
-  }
-
-  // --- Bottom Curved Navigation Bar ---
-  Widget _buildCurvedBottomNav(bool isDark, Employee emp) {
     return Container(
-      height: 68,
-      decoration: BoxDecoration(
-        color: isDark ? AppColors.darkSurface : Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 16,
-            offset: const Offset(0, -2),
-          ),
-        ],
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _buildNavTabItem(0, Icons.home_outlined, 'Home'),
-          _buildNavTabItem(1, Icons.check_circle_outline_rounded, 'Approvals'),
-
-          // Center Elevated Gradient FAB Button (Quick Punch)
+          // Profile Avatar
           InkWell(
-            onTap: () => _handlePunchAction(emp),
+            onTap: () => setState(() => _currentTab = 3),
+            borderRadius: BorderRadius.circular(24),
             child: Container(
-              width: 50,
-              height: 50,
+              width: 46,
+              height: 46,
               decoration: BoxDecoration(
-                gradient: AppColors.primaryGradient,
-                borderRadius: BorderRadius.circular(16),
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                ),
+                shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primary.withOpacity(0.45),
+                    color: const Color(0xFF6366F1).withOpacity(0.35),
                     blurRadius: 10,
                     offset: const Offset(0, 4),
                   ),
                 ],
               ),
-              child: const Icon(Icons.fingerprint_rounded, color: Colors.white, size: 26),
-            ),
-          ),
-
-          _buildNavTabItem(2, Icons.calendar_month_outlined, 'Log'),
-          _buildNavTabItem(3, Icons.settings_outlined, 'Settings'),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNavTabItem(int index, IconData icon, String label) {
-    final isSelected = _currentTab == index;
-    const activeColor = AppColors.primary;
-    final inactiveColor = Colors.grey[500];
-
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _currentTab = index;
-          _showingProfileSubscreen = false;
-        });
-      },
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, color: isSelected ? activeColor : inactiveColor, size: 22),
-          const SizedBox(height: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-              color: isSelected ? activeColor : inactiveColor,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- Modals & Dialogs ---
-  Widget _buildAppDrawer(BuildContext context, Employee emp, bool isDark) {
-    return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          UserAccountsDrawerHeader(
-            decoration: const BoxDecoration(gradient: AppColors.primaryGradient),
-            accountName: Text(emp.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-            accountEmail: Text(emp.email),
-            currentAccountPicture: CircleAvatar(
-              backgroundColor: Colors.white,
-              child: Text(
-                emp.name.isNotEmpty ? emp.name[0].toUpperCase() : 'W',
-                style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: AppColors.primary),
+              child: Center(
+                child: Text(
+                  initials.toUpperCase(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                  ),
+                ),
               ),
             ),
           ),
-          ListTile(
-            leading: const Icon(Icons.home_outlined),
-            title: const Text('Home'),
-            onTap: () {
-              Navigator.pop(context);
-              setState(() => _currentTab = 0);
-            },
+          const SizedBox(width: 14),
+
+          // Company & Employee Name
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  companyName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  emp.name.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.3,
+                    color: isDark ? Colors.white : const Color(0xFF1E293B),
+                  ),
+                ),
+                Text(
+                  'ID: ${emp.code.isNotEmpty ? emp.code : emp.id}',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w500,
+                    color: isDark ? Colors.white60 : Colors.black54,
+                  ),
+                ),
+              ],
+            ),
           ),
-          ListTile(
-            leading: const Icon(Icons.check_circle_outline_rounded),
-            title: const Text('Approvals'),
-            onTap: () {
-              Navigator.pop(context);
-              setState(() => _currentTab = 1);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.calendar_month_outlined),
-            title: const Text('My Attendance Log'),
-            onTap: () {
-              Navigator.pop(context);
-              setState(() => _currentTab = 2);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.person_outline_rounded),
-            title: const Text('My Profile'),
-            onTap: () {
-              Navigator.pop(context);
-              setState(() => _showingProfileSubscreen = true);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.settings_outlined),
-            title: const Text('Settings'),
-            onTap: () {
-              Navigator.pop(context);
-              setState(() => _currentTab = 3);
-            },
-          ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.logout_rounded, color: AppColors.absent),
-            title: const Text('Sign Out', style: TextStyle(color: AppColors.absent, fontWeight: FontWeight.w600)),
-            onTap: () {
-              Navigator.pop(context);
-              _confirmSignOut(context);
-            },
+
+          // Notification Icon with Badge
+          IconButton(
+            tooltip: 'Notifications',
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  Icons.notifications_outlined,
+                  size: 26,
+                  color: isDark ? Colors.white : const Color(0xFF1E293B),
+                ),
+                if (unreadCount > 0)
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFEF4444),
+                        shape: BoxShape.circle,
+                      ),
+                      constraints: const BoxConstraints(minWidth: 16, minHeight: 16),
+                      child: Text(
+                        unreadCount > 9 ? '9+' : '$unreadCount',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            onPressed: () => NotificationDrawer.show(context),
           ),
         ],
       ),
     );
   }
 
-  void _showNewRequestDialog(BuildContext context, bool isDark, {String initialType = 'Attendance Regularization (Missed Punch)'}) {
-    String selectedType = initialType;
-    final reasonController = TextEditingController();
-    DateTime attendanceDate = DateTime.now();
-    TimeOfDay inTime = const TimeOfDay(hour: 9, minute: 15);
-    TimeOfDay outTime = const TimeOfDay(hour: 18, minute: 30);
-    DateTime fromDate = DateTime.now();
-    DateTime toDate = DateTime.now().add(const Duration(days: 1));
-    String regularizationReason = 'Forgot to Punch IN';
-    String leaveSession = 'Full Day';
-    String permissionReason = 'Personal Emergency';
-    TimeOfDay permFromTime = const TimeOfDay(hour: 14, minute: 0);
-    TimeOfDay permToTime = const TimeOfDay(hour: 16, minute: 0);
+  // ==========================================
+  // TAB 0: HOME DASHBOARD
+  // ==========================================
+  Widget _buildHomeTab({
+    required Employee emp,
+    required Site? assignedSite,
+    required Map<String, dynamic> todayData,
+    required bool isDark,
+  }) {
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. ATTENDANCE CARD (Coral / Orange Gradient)
+          _buildAttendanceCard(todayData, isDark),
+
+          const SizedBox(height: 18),
+
+          // 2. SITE LOCATION CARD (Purple / Lavender Gradient)
+          _buildSiteLocationCard(assignedSite, isDark),
+
+          const SizedBox(height: 24),
+
+          // 3. QUICK ACTIONS (2-Column Grid)
+          Text(
+            'Quick Actions',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.2,
+              color: isDark ? Colors.white : const Color(0xFF1E293B),
+            ),
+          ),
+          const SizedBox(height: 14),
+          _buildQuickActionsGrid(emp, assignedSite, isDark),
+
+          const SizedBox(height: 22),
+
+          // 4. TODAY'S STATUS SECTION
+          _buildTodayStatusCard(todayData, isDark),
+
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAttendanceCard(Map<String, dynamic> data, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFFFF7A59), // coral
+            Color(0xFFFF5238), // warm vibrant orange
+          ],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFFF5238).withOpacity(0.35),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Header: Title & Status Badge
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.access_time_filled_rounded, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Attendance',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.2,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.22),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withOpacity(0.4)),
+                ),
+                child: Text(
+                  data['statusLabel'] as String,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 24),
+
+          // 3 Columns: Punch In | Total Hrs | Punch Out
+          Row(
+            children: [
+              Expanded(
+                child: _buildAttendanceMetric(
+                  label: 'Punch In',
+                  value: data['punchIn'] as String,
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 38,
+                color: Colors.white.withOpacity(0.3),
+              ),
+              Expanded(
+                child: _buildAttendanceMetric(
+                  label: 'Total Hrs',
+                  value: data['totalHrs'] as String,
+                ),
+              ),
+              Container(
+                width: 1,
+                height: 38,
+                color: Colors.white.withOpacity(0.3),
+              ),
+              Expanded(
+                child: _buildAttendanceMetric(
+                  label: 'Punch Out',
+                  value: data['punchOut'] as String,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAttendanceMetric({required String label, required String value}) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.white.withOpacity(0.8),
+            fontSize: 12.5,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 18,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.3,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSiteLocationCard(Site? site, bool isDark) {
+    final hasSite = site != null;
+    final siteName = hasSite ? site.name : 'No site assigned';
+    final siteAddress = hasSite ? site.address : 'Please contact your administrator to map an active site';
+    final geofenceRadius = hasSite ? '${site.geofenceRadius.toStringAsFixed(0)}m radius' : '';
+
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF6366F1), // indigo
+            Color(0xFF8B5CF6), // purple
+          ],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF6366F1).withOpacity(0.35),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Title
+          const Row(
+            children: [
+              Icon(Icons.location_on_rounded, color: Colors.white, size: 20),
+              SizedBox(width: 8),
+              Text(
+                'Site Location',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.2,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          // Site Name
+          Text(
+            siteName,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(height: 4),
+
+          // Site Address
+          Text(
+            siteAddress,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withOpacity(0.85),
+              fontSize: 12.5,
+              height: 1.3,
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // Geofence Pill
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withOpacity(0.35)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: hasSite ? const Color(0xFF34D399) : Colors.amber,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  hasSite ? '● Inside Geofence ($geofenceRadius)' : '● Outside Geofence',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickActionsGrid(Employee emp, Site? site, bool isDark) {
+    return GridView.count(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      crossAxisCount: 2,
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: 1.6,
+      children: [
+        _buildActionCard(
+          title: 'Punch In',
+          subtitle: 'Start shift with GPS',
+          icon: Icons.login_rounded,
+          color: const Color(0xFF10B981),
+          onTap: () => _triggerPunchAction(false, emp),
+          isDark: isDark,
+        ),
+        _buildActionCard(
+          title: 'Punch Out',
+          subtitle: 'End shift attendance',
+          icon: Icons.logout_rounded,
+          color: const Color(0xFFF97316),
+          onTap: () => _triggerPunchAction(true, emp),
+          isDark: isDark,
+        ),
+        _buildActionCard(
+          title: 'Face Registration',
+          subtitle: 'Biometric capture',
+          icon: Icons.face_retouching_natural_rounded,
+          color: const Color(0xFF6366F1),
+          onTap: () => _openFaceRegistration(emp),
+          isDark: isDark,
+        ),
+        _buildActionCard(
+          title: 'Attendance History',
+          subtitle: 'View monthly logs',
+          icon: Icons.calendar_month_rounded,
+          color: const Color(0xFF3B82F6),
+          onTap: () => setState(() => _currentTab = 1),
+          isDark: isDark,
+        ),
+        _buildActionCard(
+          title: 'Leave Request',
+          subtitle: 'Apply for paid/casual leave',
+          icon: Icons.event_note_rounded,
+          color: const Color(0xFF8B5CF6),
+          onTap: () {
+            setState(() {
+              _currentTab = 2;
+              _requestsSubTab = 0;
+            });
+            _showApplyLeaveModal(emp, isDark);
+          },
+          isDark: isDark,
+        ),
+        _buildActionCard(
+          title: 'Late Attendance',
+          subtitle: 'Submit regularization',
+          icon: Icons.schedule_rounded,
+          color: const Color(0xFFF59E0B),
+          onTap: () {
+            setState(() {
+              _currentTab = 2;
+              _requestsSubTab = 1;
+            });
+            _showApplyRegularizationModal(emp, isDark);
+          },
+          isDark: isDark,
+        ),
+        _buildActionCard(
+          title: 'Assigned Site',
+          subtitle: site != null ? site.name : 'Check site details',
+          icon: Icons.location_city_rounded,
+          color: const Color(0xFF06B6D4),
+          onTap: () => _showSiteDetailsModal(site, isDark),
+          isDark: isDark,
+        ),
+        _buildActionCard(
+          title: 'Profile',
+          subtitle: 'View employee record',
+          icon: Icons.badge_rounded,
+          color: const Color(0xFF14B8A6),
+          onTap: () => setState(() => _currentTab = 3),
+          isDark: isDark,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+    required bool isDark,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.12),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+            BoxShadow(
+              color: Colors.black.withOpacity(isDark ? 0.2 : 0.03),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+          border: Border.all(
+            color: isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.04),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w700,
+                      color: isDark ? Colors.white : const Color(0xFF1E293B),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTodayStatusCard(Map<String, dynamic> data, bool isDark) {
+    final status = data['statusLabel'] as String;
+    final color = data['statusColor'] as Color;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.info_outline_rounded, color: color, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Today's Status: $status",
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  status == 'PRESENT'
+                      ? 'Attendance successfully verified with site geofencing.'
+                      : status == 'LATE'
+                          ? 'Punch-in recorded after standard shift timing (09:00 AM).'
+                          : 'Ensure to punch in within your assigned site perimeter.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // TAB 1: ATTENDANCE HISTORY
+  // ==========================================
+  Widget _buildAttendanceHistoryTab({
+    required Employee emp,
+    required List<DailyAttendance> allDaily,
+    required List<AttendancePunch> allPunches,
+    required Site? assignedSite,
+    required bool isDark,
+  }) {
+    final empNormId = emp.id.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+    final empNormCode = emp.code.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+
+    bool isEmpMatch(String id) {
+      final norm = id.toLowerCase().replaceAll('-', '').replaceAll(' ', '').trim();
+      return norm == empNormId || norm == empNormCode || (empNormCode.isNotEmpty && norm.contains(empNormCode));
+    }
+
+    // Filter records for selected month
+    final monthRecords = allDaily.where((d) =>
+        isEmpMatch(d.employeeId) &&
+        d.date.year == _selectedMonth.year &&
+        d.date.month == _selectedMonth.month
+    ).toList()..sort((a, b) => b.date.compareTo(a.date));
+
+    final presentDays = monthRecords.where((d) => d.status == AttendanceStatus.present).length;
+    final lateDays = monthRecords.where((d) => d.status == AttendanceStatus.late).length;
+    final totalMinutes = monthRecords.fold<int>(0, (sum, d) => sum + d.workingDuration.inMinutes);
+    final totalHours = (totalMinutes / 60).toStringAsFixed(1);
+
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Month Selector
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.chevron_left_rounded),
+                onPressed: () {
+                  setState(() {
+                    _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1, 1);
+                  });
+                },
+              ),
+              Text(
+                DateFormat('MMMM yyyy').format(_selectedMonth),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              IconButton(
+                icon: const Icon(Icons.chevron_right_rounded),
+                onPressed: () {
+                  setState(() {
+                    _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1, 1);
+                  });
+                },
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // Monthly Summary Pills
+          Row(
+            children: [
+              Expanded(
+                child: _buildSummaryPill('Present', '$presentDays Days', const Color(0xFF10B981), isDark),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildSummaryPill('Late', '$lateDays Days', const Color(0xFFF59E0B), isDark),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _buildSummaryPill('Work Hours', '${totalHours}h', const Color(0xFF6366F1), isDark),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 20),
+
+          // Attendance Records List
+          if (monthRecords.isEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 48),
+              child: Column(
+                children: [
+                  Icon(Icons.event_busy_rounded, size: 48, color: Colors.grey.withOpacity(0.5)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'No attendance records found for ${DateFormat('MMMM yyyy').format(_selectedMonth)}.',
+                    style: const TextStyle(color: Colors.grey, fontSize: 13.5),
+                  ),
+                ],
+              ),
+            )
+          else
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: monthRecords.length,
+              separatorBuilder: (ctx, i) => const SizedBox(height: 10),
+              itemBuilder: (ctx, i) {
+                final rec = monthRecords[i];
+                final inPunchTime = rec.firstPunch?.timestamp;
+                final outPunchTime = rec.lastPunch?.timestamp;
+                final inTime = inPunchTime != null
+                    ? DateFormat('hh:mm a').format(inPunchTime)
+                    : '--:--';
+                final outTime = outPunchTime != null
+                    ? DateFormat('hh:mm a').format(outPunchTime)
+                    : '--:--';
+                final hours = (rec.workingDuration.inMinutes / 60).toStringAsFixed(1);
+                final siteText = rec.firstPunch?.siteName ?? assignedSite?.name ?? 'Assigned Site';
+
+                return Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: isDark ? Colors.white10 : Colors.black.withOpacity(0.04),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      // Date Box
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6366F1).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              DateFormat('dd').format(rec.date),
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                                color: Color(0xFF6366F1),
+                              ),
+                            ),
+                            Text(
+                              DateFormat('EEE').format(rec.date),
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF6366F1),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+
+                      // In / Out Times & Site
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$inTime - $outTime (${hours}h)',
+                              style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              siteText,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: isDark ? Colors.white60 : Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // Status Badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: rec.status == AttendanceStatus.present
+                              ? const Color(0xFF10B981).withOpacity(0.12)
+                              : const Color(0xFFF59E0B).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          rec.status.displayName.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w800,
+                            color: rec.status == AttendanceStatus.present
+                                ? const Color(0xFF10B981)
+                                : const Color(0xFFF59E0B),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryPill(String title, String val, Color col, bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+      decoration: BoxDecoration(
+        color: col.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: col.withOpacity(0.2)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            title,
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: col),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            val,
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: col),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================
+  // TAB 2: REQUESTS (LEAVE & LATE ATTENDANCE)
+  // ==========================================
+  Widget _buildRequestsTab({
+    required Employee emp,
+    required bool isDark,
+  }) {
+    final leavesAsync = ref.watch(employeeLeavesProvider(emp.id));
+    final regularizationsAsync = ref.watch(employeeRegularizationsProvider(emp.id));
+
+    return Column(
+      children: [
+        // Sub-tab Selector: [ Leave Requests ] | [ Late Attendance Requests ]
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white.withOpacity(0.06) : const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildSubTabButton(
+                    title: 'Leave Requests',
+                    index: 0,
+                    icon: Icons.event_note_rounded,
+                    isDark: isDark,
+                  ),
+                ),
+                Expanded(
+                  child: _buildSubTabButton(
+                    title: 'Late Attendance',
+                    index: 1,
+                    icon: Icons.schedule_rounded,
+                    isDark: isDark,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // Content
+        Expanded(
+          child: _requestsSubTab == 0
+              ? _buildLeavesList(leavesAsync, emp, isDark)
+              : _buildRegularizationsList(regularizationsAsync, emp, isDark),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSubTabButton({
+    required String title,
+    required int index,
+    required IconData icon,
+    required bool isDark,
+  }) {
+    final isSelected = _requestsSubTab == index;
+    return InkWell(
+      onTap: () => setState(() => _requestsSubTab = index),
+      borderRadius: BorderRadius.circular(10),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF6366F1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isSelected ? Colors.white : (isDark ? Colors.white60 : Colors.black54),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                color: isSelected ? Colors.white : (isDark ? Colors.white60 : Colors.black54),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLeavesList(
+    AsyncValue<List<LeaveRequest>> leavesAsync,
+    Employee emp,
+    bool isDark,
+  ) {
+    return leavesAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (err, _) => Center(child: Text('Unable to load leave requests: $err')),
+      data: (leaves) {
+        return SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Apply Button
+              ElevatedButton.icon(
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Apply for Leave', style: TextStyle(fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6366F1),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => _showApplyLeaveModal(emp, isDark),
+              ),
+              const SizedBox(height: 16),
+
+              if (leaves.isEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 40),
+                  child: const Center(
+                    child: Text('No leave requests found.', style: TextStyle(color: Colors.grey)),
+                  ),
+                )
+              else
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: leaves.length,
+                  separatorBuilder: (ctx, i) => const SizedBox(height: 10),
+                  itemBuilder: (ctx, i) {
+                    final l = leaves[i];
+                    final startStr = DateFormat('dd MMM').format(l.startDate);
+                    final endStr = DateFormat('dd MMM yyyy').format(l.endDate);
+                    final statusCol = l.status == LeaveStatus.approved
+                        ? const Color(0xFF10B981)
+                        : (l.status == LeaveStatus.rejected
+                            ? const Color(0xFFEF4444)
+                            : const Color(0xFFF59E0B));
+
+                    return Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                '${l.leaveType} Leave',
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: statusCol.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  l.status.displayName,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: statusCol,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            '$startStr - $endStr (${l.totalDays.toInt()} Days)',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: isDark ? Colors.white70 : const Color(0xFF475569),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (l.reason != null && l.reason!.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Reason: ${l.reason}',
+                              style: TextStyle(fontSize: 12, color: isDark ? Colors.white60 : Colors.black54),
+                            ),
+                          ],
+                          if (l.reviewRemarks != null && l.reviewRemarks!.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: statusCol.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'Remarks: ${l.reviewRemarks}',
+                                style: TextStyle(fontSize: 11.5, color: statusCol, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRegularizationsList(
+    AsyncValue<List<RegularizationRequest>> regsAsync,
+    Employee emp,
+    bool isDark,
+  ) {
+    return regsAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (err, _) => Center(child: Text('Unable to load late attendance requests: $err')),
+      data: (regs) {
+        return SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ElevatedButton.icon(
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Submit Late Attendance Request', style: TextStyle(fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6366F1),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => _showApplyRegularizationModal(emp, isDark),
+              ),
+              const SizedBox(height: 16),
+
+              if (regs.isEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 40),
+                  child: const Center(
+                    child: Text('No late attendance requests found.', style: TextStyle(color: Colors.grey)),
+                  ),
+                )
+              else
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: regs.length,
+                  separatorBuilder: (ctx, i) => const SizedBox(height: 10),
+                  itemBuilder: (ctx, i) {
+                    final r = regs[i];
+                    final dateStr = DateFormat('dd MMM yyyy').format(r.attendanceDate);
+                    final statusCol = r.status == RegularizationStatus.approved
+                        ? const Color(0xFF10B981)
+                        : (r.status == RegularizationStatus.rejected
+                            ? const Color(0xFFEF4444)
+                            : const Color(0xFFF59E0B));
+
+                    return Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                r.requestType,
+                                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: statusCol.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  r.status.displayName,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: statusCol,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Date: $dateStr · ${r.requestedInTime} to ${r.requestedOutTime}',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: isDark ? Colors.white70 : const Color(0xFF475569),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          if (r.remarks.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              'Reason: ${r.remarks}',
+                              style: TextStyle(fontSize: 12, color: isDark ? Colors.white60 : Colors.black54),
+                            ),
+                          ],
+                          if (r.adminReviewRemarks != null && r.adminReviewRemarks!.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: statusCol.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'Response: ${r.adminReviewRemarks}',
+                                style: TextStyle(fontSize: 11.5, color: statusCol, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ==========================================
+  // TAB 3: PROFILE
+  // ==========================================
+  Widget _buildProfileTab({
+    required Employee emp,
+    required Site? assignedSite,
+    required bool isDark,
+  }) {
+    final initials = emp.name.trim().isNotEmpty
+        ? emp.name.trim().split(' ').map((s) => s.isNotEmpty ? s[0] : '').take(2).join()
+        : 'EM';
+
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Profile Photo & Name Box
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.04)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(isDark ? 0.2 : 0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              children: [
+                Container(
+                  width: 76,
+                  height: 76,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF6366F1).withOpacity(0.35),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text(
+                      initials.toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  emp.name,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  emp.designation,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text(
+                    '● Active Account',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF10B981)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 18),
+
+          // Details List
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.04)),
+            ),
+            child: Column(
+              children: [
+                _buildProfileRow('Employee Code', emp.code.isNotEmpty ? emp.code : 'EMP001', Icons.tag_rounded),
+                const Divider(height: 20),
+                _buildProfileRow('Employee ID', emp.id, Icons.badge_outlined),
+                const Divider(height: 20),
+                _buildProfileRow('Department', emp.department, Icons.business_rounded),
+                const Divider(height: 20),
+                _buildProfileRow('Assigned Site', assignedSite?.name ?? 'No site assigned', Icons.location_on_outlined),
+                const Divider(height: 20),
+                _buildProfileRow('Work Email', emp.email, Icons.email_outlined),
+                const Divider(height: 20),
+                _buildProfileRow('Contact Phone', emp.phone.isNotEmpty ? emp.phone : 'Not provided', Icons.phone_outlined),
+                const Divider(height: 20),
+                _buildProfileRow('Joining Date', DateFormat('dd MMM yyyy').format(emp.joiningDate), Icons.event_available_rounded),
+                const Divider(height: 20),
+                _buildProfileRow('Monthly CTC', '₹${NumberFormat('#,##0').format(emp.monthlyCtc)}', Icons.currency_rupee_rounded),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Logout Button
+          ElevatedButton.icon(
+            icon: const Icon(Icons.logout_rounded, size: 20),
+            label: const Text('Sign Out from WorkPulse', style: TextStyle(fontWeight: FontWeight.w700)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent.withOpacity(0.12),
+              foregroundColor: Colors.redAccent,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            ),
+            onPressed: () async {
+              await ref.read(authStateProvider.notifier).logout();
+              if (mounted) context.go('/login');
+            },
+          ),
+
+          const SizedBox(height: 24),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileRow(String label, String value, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: const Color(0xFF6366F1)),
+        const SizedBox(width: 12),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w500),
+        ),
+        const Spacer(),
+        Expanded(
+          flex: 2,
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ==========================================
+  // BOTTOM NAVIGATION
+  // ==========================================
+  Widget _buildBottomNav(bool isDark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : Colors.white,
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.white10 : const Color(0xFFE2E8F0),
+            width: 1,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: BottomNavigationBar(
+          currentIndex: _currentTab,
+          onTap: (index) => setState(() => _currentTab = index),
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          type: BottomNavigationBarType.fixed,
+          selectedItemColor: const Color(0xFF6366F1),
+          unselectedItemColor: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+          selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11.5),
+          unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500, fontSize: 11),
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.home_rounded),
+              label: 'Home',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.calendar_month_rounded),
+              label: 'Attendance',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.assignment_rounded),
+              label: 'Requests',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.person_rounded),
+              label: 'Profile',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ==========================================
+  // MODALS
+  // ==========================================
+  void _showApplyLeaveModal(Employee emp, bool isDark) {
+    String selectedLeaveType = 'CASUAL';
+    DateTime fromDate = DateTime.now().add(const Duration(days: 1));
+    DateTime toDate = DateTime.now().add(const Duration(days: 2));
+    final reasonCtrl = TextEditingController();
+    bool isSubmitting = false;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-          child: Container(
-            padding: const EdgeInsets.all(22),
-            decoration: BoxDecoration(
-              color: isDark ? AppColors.darkSurface : Colors.white,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-            ),
-            child: SingleChildScrollView(
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (modalCtx, setModalState) {
+            final days = toDate.difference(fromDate).inDays + 1;
+
+            return Container(
+              padding: EdgeInsets.only(
+                left: 24,
+                right: 24,
+                top: 20,
+                bottom: MediaQuery.of(modalCtx).viewInsets.bottom + 24,
+              ),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1571,792 +1862,451 @@ class _FieldDashboardScreenState extends ConsumerState<FieldDashboardScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          Icon(
-                            selectedType.contains('Attendance') || selectedType.contains('Duty')
-                                ? Icons.access_time_filled_rounded
-                                : (selectedType.contains('Permission') ? Icons.timer_rounded : Icons.calendar_today_rounded),
-                            color: AppColors.primary,
-                            size: 22,
-                          ),
-                          const SizedBox(width: 8),
-                          const Text('New Request / Regulation', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                        ],
+                      const Text(
+                        'Apply for Leave',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
                       ),
-                      IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(ctx)),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.pop(modalCtx),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
 
-                  // Request Type Dropdown
+                  // Leave Type Dropdown
                   DropdownButtonFormField<String>(
-                    value: selectedType,
-                    decoration: const InputDecoration(
-                      labelText: 'Request Category',
-                      prefixIcon: Icon(Icons.category_rounded, size: 20),
+                    value: selectedLeaveType,
+                    decoration: InputDecoration(
+                      labelText: 'Leave Type',
+                      prefixIcon: const Icon(Icons.category_rounded, size: 20),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     items: const [
-                      DropdownMenuItem(
-                        value: 'Attendance Regularization (Missed Punch)',
-                        child: Text('Attendance Regularization (Missed Punch)'),
+                      DropdownMenuItem(value: 'CASUAL', child: Text('Casual Leave (CL)')),
+                      DropdownMenuItem(value: 'SICK', child: Text('Sick Leave (SL)')),
+                      DropdownMenuItem(value: 'PAID', child: Text('Paid Earned Leave (EL)')),
+                      DropdownMenuItem(value: 'UNPAID', child: Text('Loss of Pay (LOP)')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setModalState(() => selectedLeaveType = val);
+                    },
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Date Range Row
+                  Row(
+                    children: [
+                      Expanded(
+                        child: InkWell(
+                          onTap: () async {
+                            final picked = await showDatePicker(
+                              context: modalCtx,
+                              initialDate: fromDate,
+                              firstDate: DateTime.now().subtract(const Duration(days: 7)),
+                              lastDate: DateTime.now().add(const Duration(days: 90)),
+                            );
+                            if (picked != null) {
+                              setModalState(() {
+                                fromDate = picked;
+                                if (toDate.isBefore(fromDate)) toDate = fromDate;
+                              });
+                            }
+                          },
+                          child: InputDecorator(
+                            decoration: InputDecoration(
+                              labelText: 'From Date',
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: Text(DateFormat('dd MMM yyyy').format(fromDate)),
+                          ),
+                        ),
                       ),
-                      DropdownMenuItem(
-                        value: 'Attendance Regularization (Shift Time Correction)',
-                        child: Text('Attendance Regularization (Time Correction)'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'On Duty / Official Client Visit',
-                        child: Text('On Duty / Official Client Visit'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'Permission (Short Hours)',
-                        child: Text('Permission (Short Hours)'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'Casual Leave (CL)',
-                        child: Text('Casual Leave (CL)'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'Sick Leave (SL)',
-                        child: Text('Sick Leave (SL)'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'Earned Leave (EL)',
-                        child: Text('Earned Leave (EL)'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'Compensatory Off',
-                        child: Text('Compensatory Off'),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: InkWell(
+                          onTap: () async {
+                            final picked = await showDatePicker(
+                              context: modalCtx,
+                              initialDate: toDate,
+                              firstDate: fromDate,
+                              lastDate: DateTime.now().add(const Duration(days: 90)),
+                            );
+                            if (picked != null) {
+                              setModalState(() => toDate = picked);
+                            }
+                          },
+                          child: InputDecorator(
+                            decoration: InputDecoration(
+                              labelText: 'To Date',
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                            child: Text(DateFormat('dd MMM yyyy').format(toDate)),
+                          ),
+                        ),
                       ),
                     ],
-                    onChanged: (newVal) {
-                      if (newVal != null) {
-                        setModalState(() => selectedType = newVal);
-                      }
-                    },
                   ),
-                  const SizedBox(height: 14),
 
-                  // Dynamic Section 1: Attendance Regularization / On Duty
-                  if (selectedType.contains('Attendance') || selectedType.contains('Duty')) ...[
-                    // Date Picker
-                    InkWell(
-                      onTap: () async {
-                        final picked = await showDatePicker(
-                          context: context,
-                          initialDate: attendanceDate,
-                          firstDate: DateTime(2026, 1, 1),
-                          lastDate: DateTime(2026, 12, 31),
-                        );
-                        if (picked != null) setModalState(() => attendanceDate = picked);
-                      },
-                      child: InputDecorator(
-                        decoration: const InputDecoration(
-                          labelText: 'Attendance Date',
-                          prefixIcon: Icon(Icons.calendar_month_rounded, size: 20),
-                        ),
-                        child: Text(DateFormat('dd MMMM yyyy (EEEE)').format(attendanceDate)),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Duration: $days Day(s)',
+                    style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Color(0xFF6366F1)),
+                  ),
 
-                    // Time Pickers (In Time & Out Time)
-                    Row(
-                      children: [
-                        Expanded(
-                          child: InkWell(
-                            onTap: () async {
-                              final picked = await showTimePicker(
-                                context: context,
-                                initialTime: inTime,
-                              );
-                              if (picked != null) setModalState(() => inTime = picked);
-                            },
-                            child: InputDecorator(
-                              decoration: const InputDecoration(
-                                labelText: 'Check-In Time',
-                                prefixIcon: Icon(Icons.login_rounded, color: AppColors.present, size: 20),
-                              ),
-                              child: Text(inTime.format(context), style: const TextStyle(fontWeight: FontWeight.w700)),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: InkWell(
-                            onTap: () async {
-                              final picked = await showTimePicker(
-                                context: context,
-                                initialTime: outTime,
-                              );
-                              if (picked != null) setModalState(() => outTime = picked);
-                            },
-                            child: InputDecorator(
-                              decoration: const InputDecoration(
-                                labelText: 'Check-Out Time',
-                                prefixIcon: Icon(Icons.logout_rounded, color: Color(0xFFF59E0B), size: 20),
-                              ),
-                              child: Text(outTime.format(context), style: const TextStyle(fontWeight: FontWeight.w700)),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
+                  const SizedBox(height: 12),
 
-                    // Regularization Reason Category Dropdown
-                    DropdownButtonFormField<String>(
-                      value: regularizationReason,
-                      decoration: const InputDecoration(
-                        labelText: 'Regularization Reason Dropdown',
-                        prefixIcon: Icon(Icons.rule_rounded, size: 20),
-                      ),
-                      items: const [
-                        DropdownMenuItem(value: 'Forgot to Punch IN', child: Text('Forgot to Punch IN')),
-                        DropdownMenuItem(value: 'Forgot to Punch OUT', child: Text('Forgot to Punch OUT')),
-                        DropdownMenuItem(
-                          value: 'Out of Geofence (Client Site - Contact HR/Admin)',
-                          child: Text('Out of Geofence (Contact HR/Admin)'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'Network / Device Glitch during Punch',
-                          child: Text('Network / Device Glitch'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'Biometric Kiosk Error',
-                          child: Text('Biometric Kiosk Error'),
-                        ),
-                        DropdownMenuItem(
-                          value: 'Late Arrival with Permission',
-                          child: Text('Late Arrival with Permission'),
-                        ),
-                        DropdownMenuItem(value: 'Official External Meeting', child: Text('Official External Meeting')),
-                        DropdownMenuItem(value: 'Other Reason', child: Text('Other Specific Reason')),
-                      ],
-                      onChanged: (newVal) {
-                        if (newVal != null) setModalState(() => regularizationReason = newVal);
-                      },
-                    ),
-                  ]
-
-                  // Dynamic Section 2: Permission Hours
-                  else if (selectedType.contains('Permission')) ...[
-                    InkWell(
-                      onTap: () async {
-                        final picked = await showDatePicker(
-                          context: context,
-                          initialDate: attendanceDate,
-                          firstDate: DateTime(2026, 1, 1),
-                          lastDate: DateTime(2026, 12, 31),
-                        );
-                        if (picked != null) setModalState(() => attendanceDate = picked);
-                      },
-                      child: InputDecorator(
-                        decoration: const InputDecoration(
-                          labelText: 'Permission Date',
-                          prefixIcon: Icon(Icons.calendar_month_rounded, size: 20),
-                        ),
-                        child: Text(DateFormat('dd MMMM yyyy').format(attendanceDate)),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: InkWell(
-                            onTap: () async {
-                              final picked = await showTimePicker(context: context, initialTime: permFromTime);
-                              if (picked != null) setModalState(() => permFromTime = picked);
-                            },
-                            child: InputDecorator(
-                              decoration: const InputDecoration(labelText: 'From Time', prefixIcon: Icon(Icons.timer_outlined, size: 20)),
-                              child: Text(permFromTime.format(context), style: const TextStyle(fontWeight: FontWeight.w700)),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: InkWell(
-                            onTap: () async {
-                              final picked = await showTimePicker(context: context, initialTime: permToTime);
-                              if (picked != null) setModalState(() => permToTime = picked);
-                            },
-                            child: InputDecorator(
-                              decoration: const InputDecoration(labelText: 'To Time', prefixIcon: Icon(Icons.timer_off_outlined, size: 20)),
-                              child: Text(permToTime.format(context), style: const TextStyle(fontWeight: FontWeight.w700)),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      value: permissionReason,
-                      decoration: const InputDecoration(labelText: 'Permission Purpose', prefixIcon: Icon(Icons.help_outline_rounded, size: 20)),
-                      items: const [
-                        DropdownMenuItem(value: 'Personal Emergency', child: Text('Personal Emergency')),
-                        DropdownMenuItem(value: 'Medical Checkup', child: Text('Medical Checkup')),
-                        DropdownMenuItem(value: 'Official Bank / Client Work', child: Text('Official Bank / Client Work')),
-                        DropdownMenuItem(value: 'Transport Delay', child: Text('Transport / Traffic Delay')),
-                      ],
-                      onChanged: (val) {
-                        if (val != null) setModalState(() => permissionReason = val);
-                      },
-                    ),
-                  ]
-
-                  // Dynamic Section 3: Leave (Casual, Sick, Earned)
-                  else ...[
-                    Row(
-                      children: [
-                        Expanded(
-                          child: InkWell(
-                            onTap: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: fromDate,
-                                firstDate: DateTime(2026, 1, 1),
-                                lastDate: DateTime(2026, 12, 31),
-                              );
-                              if (picked != null) setModalState(() => fromDate = picked);
-                            },
-                            child: InputDecorator(
-                              decoration: const InputDecoration(labelText: 'From Date', prefixIcon: Icon(Icons.event_rounded, size: 20)),
-                              child: Text(DateFormat('dd MMM yyyy').format(fromDate)),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: InkWell(
-                            onTap: () async {
-                              final picked = await showDatePicker(
-                                context: context,
-                                initialDate: toDate,
-                                firstDate: fromDate,
-                                lastDate: DateTime(2026, 12, 31),
-                              );
-                              if (picked != null) setModalState(() => toDate = picked);
-                            },
-                            child: InputDecorator(
-                              decoration: const InputDecoration(labelText: 'To Date', prefixIcon: Icon(Icons.event_busy_rounded, size: 20)),
-                              child: Text(DateFormat('dd MMM yyyy').format(toDate)),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    DropdownButtonFormField<String>(
-                      value: leaveSession,
-                      decoration: const InputDecoration(labelText: 'Leave Duration / Session', prefixIcon: Icon(Icons.timelapse_rounded, size: 20)),
-                      items: const [
-                        DropdownMenuItem(value: 'Full Day', child: Text('Full Day (100% Shift)')),
-                        DropdownMenuItem(value: 'First Half (Morning)', child: Text('First Half (09:00 AM - 01:30 PM)')),
-                        DropdownMenuItem(value: 'Second Half (Afternoon)', child: Text('Second Half (01:30 PM - 06:00 PM)')),
-                      ],
-                      onChanged: (val) {
-                        if (val != null) setModalState(() => leaveSession = val);
-                      },
-                    ),
-                  ],
-
-                  const SizedBox(height: 14),
-
-                  // Reason / Justification Notes
-                  TextFormField(
-                    controller: reasonController,
-                    decoration: const InputDecoration(
-                      labelText: 'Reason / Justification / Remarks',
-                      hintText: 'Enter detailed reason for HR and Manager review',
-                      prefixIcon: Icon(Icons.notes_rounded, size: 20),
-                    ),
+                  // Reason
+                  TextField(
+                    controller: reasonCtrl,
                     maxLines: 2,
+                    decoration: InputDecoration(
+                      labelText: 'Reason for Leave',
+                      hintText: 'e.g. Family function, medical consultation...',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
                   ),
-                  const SizedBox(height: 20),
+
+                  const SizedBox(height: 18),
 
                   // Submit Button
-                  ElevatedButton.icon(
+                  ElevatedButton(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFF59E0B),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                      elevation: 4,
+                      backgroundColor: const Color(0xFF6366F1),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
-                    label: const Text(
-                      'Submit Regulation / Request',
-                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 15),
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            setModalState(() => isSubmitting = true);
+                            try {
+                              await ref.read(leaveRequestsProvider.notifier).addLeave(
+                                    employeeId: emp.id,
+                                    leaveType: selectedLeaveType,
+                                    startDate: fromDate,
+                                    endDate: toDate,
+                                    reason: reasonCtrl.text.trim().isNotEmpty
+                                        ? reasonCtrl.text.trim()
+                                        : 'Personal leave application',
+                                  );
+
+                              ref.invalidate(employeeLeavesProvider(emp.id));
+
+                              if (!mounted) return;
+                              Navigator.pop(modalCtx);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Leave request submitted successfully for approval!'),
+                                  backgroundColor: Color(0xFF10B981),
+                                ),
+                              );
+                            } catch (e) {
+                              setModalState(() => isSubmitting = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Error: ${e.toString().replaceAll('Exception:', '')}'),
+                                  backgroundColor: Colors.redAccent,
+                                ),
+                              );
+                            }
+                          },
+                    child: isSubmitting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Text('Submit Leave Request', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showApplyRegularizationModal(Employee emp, bool isDark) {
+    String requestType = 'Late Punch IN';
+    String reasonCategory = 'Traffic Delay';
+    DateTime attDate = DateTime.now();
+    String reqIn = '09:00 AM';
+    String reqOut = '06:00 PM';
+    final remarksCtrl = TextEditingController();
+    bool isSubmitting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (modalCtx, setModalState) {
+            return Container(
+              padding: EdgeInsets.only(
+                left: 24,
+                right: 24,
+                top: 20,
+                bottom: MediaQuery.of(modalCtx).viewInsets.bottom + 24,
+              ),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Late Attendance Request',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded),
+                        onPressed: () => Navigator.pop(modalCtx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Request Type
+                  DropdownButtonFormField<String>(
+                    value: requestType,
+                    decoration: InputDecoration(
+                      labelText: 'Request Type',
+                      prefixIcon: const Icon(Icons.schedule_rounded, size: 20),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    onPressed: () {
-                      String dateStr = '';
-                      String detailReason = '';
-
-                      if (selectedType.contains('Attendance') || selectedType.contains('Duty')) {
-                        dateStr = '${DateFormat('dd MMM yyyy').format(attendanceDate)} (${inTime.format(context)} - ${outTime.format(context)})';
-                        detailReason = '$regularizationReason: ${reasonController.text.isEmpty ? "Shift hours regularized by employee" : reasonController.text}';
-                      } else if (selectedType.contains('Permission')) {
-                        dateStr = '${DateFormat('dd MMM yyyy').format(attendanceDate)} (${permFromTime.format(context)} - ${permToTime.format(context)})';
-                        detailReason = '$permissionReason: ${reasonController.text.isEmpty ? "Short permission requested" : reasonController.text}';
-                      } else {
-                        dateStr = '${DateFormat('dd MMM').format(fromDate)} - ${DateFormat('dd MMM yyyy').format(toDate)} ($leaveSession)';
-                        detailReason = reasonController.text.isEmpty ? 'Scheduled leave requirement' : reasonController.text;
-                      }
-
-                      setState(() {
-                        _requests.insert(0, {
-                          'title': selectedType,
-                          'type': selectedType.contains('Leave') ? 'Leave' : 'Attendance',
-                          'dates': dateStr,
-                          'reason': detailReason,
-                          'status': 'Pending',
-                          'statusColor': AppColors.late,
-                          'approver': 'Sarah Jenkins (HR) & R Gayathri (Manager)',
-                          'appliedOn': DateFormat('dd MMM yyyy').format(DateTime.now()),
-                        });
-                      });
-
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Regulation request submitted successfully to HR & Admin!'),
-                          backgroundColor: AppColors.present,
-                        ),
-                      );
+                    items: const [
+                      DropdownMenuItem(value: 'Late Punch IN', child: Text('Late Punch IN (Traffic / Delay)')),
+                      DropdownMenuItem(value: 'Missed Punch OUT', child: Text('Missed / Early Punch OUT')),
+                      DropdownMenuItem(value: 'Both IN & OUT', child: Text('Both IN & OUT Regularization')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setModalState(() => requestType = val);
                     },
                   ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
-  void _showRequestDetailModal(BuildContext context, Map<String, dynamic> req, bool isDark) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-          color: isDark ? AppColors.darkSurface : Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(req['title'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: (req['statusColor'] as Color).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(req['status'], style: TextStyle(color: req['statusColor'] as Color, fontWeight: FontWeight.w700)),
-                ),
-              ],
-            ),
-            const Divider(height: 20),
-            _buildProfileField('Dates', req['dates']),
-            _buildProfileField('Category', req['type']),
-            _buildProfileField('Reason / Remarks', req['reason']),
-            _buildProfileField('Approver', req['approver'] ?? 'Sarah Jenkins (HR) & Admin'),
-            _buildProfileField('Applied On', req['appliedOn'] ?? '22 Aug 2026'),
-            const SizedBox(height: 16),
-            if (req['status'] == 'Pending') ...[
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      style: OutlinedButton.styleFrom(foregroundColor: AppColors.absent),
-                      onPressed: () {
-                        setState(() {
-                          req['status'] = 'Rejected';
-                          req['statusColor'] = AppColors.absent;
-                        });
-                        Navigator.pop(ctx);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Request rejected by HR/Admin.')),
-                        );
-                      },
-                      child: const Text('Reject'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.present),
-                      icon: const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
-                      label: const Text(
-                        'Approve Late Attendance',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                  const SizedBox(height: 12),
+
+                  // Attendance Date Picker
+                  InkWell(
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: modalCtx,
+                        initialDate: attDate,
+                        firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                        lastDate: DateTime.now(),
+                      );
+                      if (picked != null) setModalState(() => attDate = picked);
+                    },
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: 'Attendance Date',
+                        prefixIcon: const Icon(Icons.calendar_today_rounded, size: 20),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                       ),
-                      onPressed: () {
-                        setState(() {
-                          req['status'] = 'Approved (Late Attendance Marked)';
-                          req['statusColor'] = AppColors.present;
-                        });
-                        Navigator.pop(ctx);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Late attendance approved! Employee record updated to Present/Late.'),
-                            backgroundColor: AppColors.present,
-                          ),
-                        );
-                      },
+                      child: Text(DateFormat('dd MMMM yyyy').format(attDate)),
                     ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Requested In & Out Times
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: reqIn,
+                          decoration: InputDecoration(
+                            labelText: 'Expected In',
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onChanged: (val) => reqIn = val,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextFormField(
+                          initialValue: reqOut,
+                          decoration: InputDecoration(
+                            labelText: 'Expected Out',
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          onChanged: (val) => reqOut = val,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Reason Category & Remarks
+                  DropdownButtonFormField<String>(
+                    value: reasonCategory,
+                    decoration: InputDecoration(
+                      labelText: 'Reason Category',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'Traffic Delay', child: Text('Traffic Delay / Transport Issue')),
+                      DropdownMenuItem(value: 'Client Meeting', child: Text('Client Site Visit / On Duty')),
+                      DropdownMenuItem(value: 'Device / Network Glitch', child: Text('Device / Network Glitch')),
+                      DropdownMenuItem(value: 'Medical Emergency', child: Text('Medical / Personal Emergency')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) setModalState(() => reasonCategory = val);
+                    },
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  TextField(
+                    controller: remarksCtrl,
+                    maxLines: 2,
+                    decoration: InputDecoration(
+                      labelText: 'Detailed Explanation',
+                      hintText: 'Please describe the reason for late attendance...',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+
+                  const SizedBox(height: 18),
+
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF6366F1),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            setModalState(() => isSubmitting = true);
+                            try {
+                              final req = RegularizationRequest(
+                                id: '',
+                                employeeId: emp.id,
+                                employeeCode: emp.code,
+                                employeeName: emp.name,
+                                department: emp.department,
+                                requestType: requestType,
+                                reasonCategory: reasonCategory,
+                                attendanceDate: attDate,
+                                requestedInTime: reqIn,
+                                requestedOutTime: reqOut,
+                                remarks: remarksCtrl.text.trim().isNotEmpty
+                                    ? remarksCtrl.text.trim()
+                                    : reasonCategory,
+                                appliedAt: DateTime.now(),
+                              );
+
+                              await ref.read(regularizationRequestsProvider.notifier).addRequest(req);
+                              ref.invalidate(employeeRegularizationsProvider(emp.id));
+
+                              if (!mounted) return;
+                              Navigator.pop(modalCtx);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Late attendance request submitted successfully!'),
+                                  backgroundColor: Color(0xFF10B981),
+                                ),
+                              );
+                            } catch (e) {
+                              setModalState(() => isSubmitting = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Error: ${e.toString().replaceAll('Exception:', '')}'),
+                                  backgroundColor: Colors.redAccent,
+                                ),
+                              );
+                            }
+                          },
+                    child: isSubmitting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Text('Submit Regularization Request', style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-            ],
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Close'),
-              ),
-            ),
-          ],
-        ),
-      ),
+            );
+          },
+        );
+      },
     );
   }
 
-  void _showLeaveBalanceModal(BuildContext context, bool isDark) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Leave Balances (2026)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const Divider(height: 20),
-            _buildProfileField('Casual Leave (CL)', '4 Days Available (Used: 2)'),
-            _buildProfileField('Sick Leave (SL)', '6 Days Available (Used: 0)'),
-            _buildProfileField('Earned Leave (EL)', '12 Days Available (Used: 3)'),
-            _buildProfileField('Optional Holiday', '1 Day Available'),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  _showNewRequestDialog(context, isDark, initialType: 'Casual Leave (CL)');
-                },
-                child: const Text('Apply for Leave', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showAttendanceRegularizationModal(BuildContext context, bool isDark) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Attendance Regularization', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const Divider(height: 20),
-            const Text('Select a missed punch, out-of-geofence, or absent day from your log to request manager and HR correction.'),
-            const SizedBox(height: 14),
-            _buildProfileField('Pending Regularizations', '1 Request (20 Aug)'),
-            _buildProfileField('Approved Regularizations', '3 Requests this month'),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  _showNewRequestDialog(context, isDark, initialType: 'Attendance Regularization (Missed Punch)');
-                },
-                child: const Text('Regularize Attendance', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showNotificationSettingsModal(BuildContext context, bool isDark) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setModalState) => Container(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Notification Preferences', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-              const Divider(height: 20),
-              SwitchListTile(
-                title: const Text('Punch In / Out Reminders'),
-                subtitle: const Text('Remind 15 mins before scheduled shift'),
-                value: _punchReminders,
-                activeColor: AppColors.primary,
-                onChanged: (val) {
-                  setModalState(() => _punchReminders = val);
-                  setState(() => _punchReminders = val);
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Geofence Arrival Alerts'),
-                subtitle: const Text('Notify when entering mapped approved site perimeter'),
-                value: _geofenceAlerts,
-                activeColor: AppColors.primary,
-                onChanged: (val) {
-                  setModalState(() => _geofenceAlerts = val);
-                  setState(() => _geofenceAlerts = val);
-                },
-              ),
-              SwitchListTile(
-                title: const Text('Approval Status Notifications'),
-                subtitle: const Text('Instant notification when manager approves leave'),
-                value: _approvalAlerts,
-                activeColor: AppColors.primary,
-                onChanged: (val) {
-                  setModalState(() => _approvalAlerts = val);
-                  setState(() => _approvalAlerts = val);
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showOrganizationModal(BuildContext context, bool isDark) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Organization Information', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const Divider(height: 20),
-            _buildProfileField('Company', 'WorkPulse Enterprise HR Solutions'),
-            _buildProfileField('Headquarters', 'Chennai Tech Corridor HQ'),
-            _buildProfileField('Working Days', 'Monday - Friday (5 Days)'),
-            _buildProfileField('Standard Shift', '09:00 AM - 06:00 PM (Flexi Timing)'),
-            _buildProfileField('HR Support', 'hr@workpulse.io'),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showFaceIdModal(BuildContext context, bool isDark) {
+  void _showSiteDetailsModal(Site? site, bool isDark) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Row(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
           children: [
-            Icon(Icons.face_rounded, color: AppColors.primary),
-            SizedBox(width: 10),
-            Text('Face ID Registration'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 90,
-              height: 90,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.15),
-                shape: BoxShape.circle,
+            const Icon(Icons.location_city_rounded, color: Color(0xFF6366F1), size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                site != null ? site.name : 'Assigned Site Details',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
               ),
-              child: const Icon(Icons.check_circle_rounded, color: AppColors.present, size: 52),
-            ),
-            const SizedBox(height: 14),
-            const Text(
-              'Biometric Face ID is active and enrolled for WorkPulse mobile kiosk terminals.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13),
             ),
           ],
         ),
+        content: site != null
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildModalSiteInfo('Client', site.client),
+                  const SizedBox(height: 8),
+                  _buildModalSiteInfo('Project', site.project),
+                  const SizedBox(height: 8),
+                  _buildModalSiteInfo('Address', site.address),
+                  const SizedBox(height: 8),
+                  _buildModalSiteInfo('Geofence Radius', '${site.geofenceRadius.toStringAsFixed(0)} meters'),
+                  const SizedBox(height: 8),
+                  _buildModalSiteInfo('Coordinates', '${site.latitude.toStringAsFixed(4)}, ${site.longitude.toStringAsFixed(4)}'),
+                  const SizedBox(height: 8),
+                  _buildModalSiteInfo('Site Manager', site.siteManagerName.isNotEmpty ? site.siteManagerName : 'Operations Lead'),
+                ],
+              )
+            : const Padding(
+                padding: EdgeInsets.symmetric(vertical: 14),
+                child: Text('No active site mapping found for your profile. Please contact HR manager to assign your work location.'),
+              ),
         actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Biometric Face Template re-synced!')),
-              );
-            },
-            child: const Text('Re-scan Face'),
-          ),
           ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6366F1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Done'),
+            child: const Text('Close', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
 
-  void _showPdfExportDialog(BuildContext context, bool isDark) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Row(
-          children: [
-            Icon(Icons.picture_as_pdf_rounded, color: AppColors.primary),
-            SizedBox(width: 10),
-            Text('Export Monthly Timesheet'),
-          ],
-        ),
-        content: const Text(
-          'Download official August 2026 Attendance & Payroll Log PDF generated by WorkPulse HR Engine.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            icon: const Icon(Icons.download_rounded, color: Colors.white, size: 18),
-            label: const Text('Download PDF', style: TextStyle(color: Colors.white)),
-            onPressed: () {
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('August_2026_Attendance_Report.pdf downloaded successfully!')),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showDayDetailBottomSheet(int day, bool isHoliday, bool isAbsent, bool isHalfDay, bool isSunday) {
-    String status = isHoliday ? 'Holiday' : (isSunday ? 'Weekly Off' : (isAbsent ? 'Absent' : (isHalfDay ? 'Half Day' : 'Present')));
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => Container(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Date: $day August 2026', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: (isAbsent ? AppColors.absent : (isHalfDay ? AppColors.late : AppColors.present)).withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    status,
-                    style: TextStyle(
-                      color: isAbsent ? AppColors.absent : (isHalfDay ? AppColors.late : AppColors.present),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const Divider(height: 20),
-            if (!isSunday && !isHoliday && !isAbsent) ...[
-              _buildProfileField('In Time', '09:12 AM'),
-              _buildProfileField('Out Time', '06:15 PM'),
-              _buildProfileField('Total Working Duration', '09 hrs 03 mins'),
-              _buildProfileField('Location', 'CTS Chennai Campus'),
-            ] else if (isAbsent) ...[
-              _buildProfileField('Reason', 'Unscheduled Absence'),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _showNewRequestDialog(context, false, initialType: 'Attendance Regularization (Missed Punch)');
-                  },
-                  child: const Text('Request Regularization', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                ),
-              ),
-            ] else if (isHoliday) ...[
-              _buildProfileField('Holiday Name', day == 15 ? 'Independence Day' : 'Special Corporate Holiday'),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showQrCodeModal(BuildContext context, Employee emp, bool isDark) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Center(child: Text('WorkPulse Digital ID Card')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: const Icon(Icons.qr_code_2_rounded, size: 160, color: Colors.black87),
-            ),
-            const SizedBox(height: 12),
-            Text(emp.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            Text('${emp.code} • ${emp.department}', style: const TextStyle(color: Colors.grey, fontSize: 13)),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
-        ],
-      ),
-    );
-  }
-
-  void _showNotificationsBottomSheet(BuildContext context, bool isDark) {
-    NotificationDrawer.show(context);
-  }
-
-  void _confirmSignOut(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Sign Out'),
-        content: const Text('Are you sure you want to log out of your WorkPulse workspace?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.absent),
-            onPressed: () {
-              Navigator.pop(ctx);
-              ref.read(authStateProvider.notifier).logout();
-              context.go('/login');
-            },
-            child: const Text('Sign Out', style: TextStyle(color: Colors.white)),
-          ),
+  Widget _buildModalSiteInfo(String label, String value) {
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(fontSize: 13, color: Colors.black87),
+        children: [
+          TextSpan(text: '$label: ', style: const TextStyle(fontWeight: FontWeight.w700)),
+          TextSpan(text: value),
         ],
       ),
     );

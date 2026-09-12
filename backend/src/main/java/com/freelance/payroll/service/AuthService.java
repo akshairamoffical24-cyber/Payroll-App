@@ -177,6 +177,11 @@ public class AuthService {
         // Audit Log
         recordAuditLog("LOGIN", user.getName(), normalizedRole, "User logged in successfully via username/email: " + input);
 
+        EmployeeEntity emp = null;
+        if (user.getEmployeeId() != null) {
+            emp = employeeRepository.findById(user.getEmployeeId()).orElse(null);
+        }
+
         return AuthResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
@@ -184,7 +189,11 @@ public class AuthService {
                 .name(user.getName())
                 .role(normalizedRole)
                 .employeeId(user.getEmployeeId())
-                .department(user.getDepartment())
+                .employeeCode(emp != null ? emp.getCode() : (user.getUsername() != null ? user.getUsername() : null))
+                .department(user.getDepartment() != null ? user.getDepartment() : (emp != null ? emp.getDepartment() : null))
+                .designation(emp != null ? emp.getDesignation() : null)
+                .phone(emp != null ? emp.getPhone() : null)
+                .monthlyCtc(emp != null ? emp.getMonthlyCtc() : null)
                 .avatarUrl(user.getAvatarUrl())
                 .token(token)
                 .refreshToken(refreshToken)
@@ -209,6 +218,11 @@ public class AuthService {
         user.setToken(newToken);
         userRepository.save(user);
 
+        EmployeeEntity emp = null;
+        if (user.getEmployeeId() != null) {
+            emp = employeeRepository.findById(user.getEmployeeId()).orElse(null);
+        }
+
         return AuthResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
@@ -216,7 +230,11 @@ public class AuthService {
                 .name(user.getName())
                 .role(user.getRole())
                 .employeeId(user.getEmployeeId())
-                .department(user.getDepartment())
+                .employeeCode(emp != null ? emp.getCode() : null)
+                .department(user.getDepartment() != null ? user.getDepartment() : (emp != null ? emp.getDepartment() : null))
+                .designation(emp != null ? emp.getDesignation() : null)
+                .phone(emp != null ? emp.getPhone() : null)
+                .monthlyCtc(emp != null ? emp.getMonthlyCtc() : null)
                 .avatarUrl(user.getAvatarUrl())
                 .token(newToken)
                 .refreshToken(refreshToken)
@@ -372,6 +390,11 @@ public class AuthService {
         // Audit Log
         recordAuditLog("GOOGLE_LOGIN_SUCCESS", user.getName(), user.getRole(), "User logged in successfully via Google Sign-In: " + finalEmail);
 
+        EmployeeEntity emp = null;
+        if (user.getEmployeeId() != null) {
+            emp = employeeRepository.findById(user.getEmployeeId()).orElse(null);
+        }
+
         return AuthResponse.builder()
                 .id(user.getId())
                 .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
@@ -379,7 +402,11 @@ public class AuthService {
                 .name(user.getName())
                 .role(user.getRole())
                 .employeeId(user.getEmployeeId())
-                .department(user.getDepartment())
+                .employeeCode(emp != null ? emp.getCode() : null)
+                .department(user.getDepartment() != null ? user.getDepartment() : (emp != null ? emp.getDepartment() : null))
+                .designation(emp != null ? emp.getDesignation() : null)
+                .phone(emp != null ? emp.getPhone() : null)
+                .monthlyCtc(emp != null ? emp.getMonthlyCtc() : null)
                 .avatarUrl(user.getAvatarUrl())
                 .token(token)
                 .refreshToken(refreshToken)
@@ -530,13 +557,12 @@ public class AuthService {
             throw new ForbiddenException("Employee account is inactive. Please contact your administrator.");
         }
 
-        String role = user.getRole();
-        if ("FIELD_STAFF".equalsIgnoreCase(role) || "field_staff".equalsIgnoreCase(role)) {
-            role = "fieldStaff";
-        } else if ("HR".equalsIgnoreCase(role)) {
-            role = "hr";
-        } else if ("ADMIN".equalsIgnoreCase(role)) {
-            role = "admin";
+        // Force fieldStaff role for employee self-service login so router directs them to /field-dashboard
+        String role = "fieldStaff";
+        user.setRole(role);
+        user.setEmployeeId(emp.getId());
+        if (emp.getDepartment() != null) {
+            user.setDepartment(emp.getDepartment());
         }
 
         String token = jwtService.generateToken(user.getEmail(), role, user.getName(), user.getEmployeeId());
@@ -549,13 +575,17 @@ public class AuthService {
 
         return AuthResponse.builder()
                 .id(user.getId())
-                .username(user.getUsername() != null ? user.getUsername() : user.getEmail())
+                .username(user.getUsername() != null ? user.getUsername() : emp.getCode())
                 .email(user.getEmail())
-                .name(user.getName())
+                .name(user.getName() != null ? user.getName() : emp.getName())
                 .role(role)
-                .employeeId(user.getEmployeeId())
-                .department(user.getDepartment())
-                .avatarUrl(user.getAvatarUrl())
+                .employeeId(emp.getId())
+                .employeeCode(emp.getCode())
+                .department(emp.getDepartment() != null ? emp.getDepartment() : user.getDepartment())
+                .designation(emp.getDesignation())
+                .phone(emp.getPhone())
+                .monthlyCtc(emp.getMonthlyCtc())
+                .avatarUrl(emp.getAvatarUrl() != null ? emp.getAvatarUrl() : user.getAvatarUrl())
                 .token(token)
                 .refreshToken(refreshToken)
                 .build();
@@ -571,17 +601,27 @@ public class AuthService {
             if (userOpt.isEmpty()) {
                 userOpt = userRepository.findByUsernameIgnoreCase(username);
             }
-            return userOpt.map(u -> AuthResponse.builder()
-                    .id(u.getId())
-                    .username(u.getUsername())
-                    .email(u.getEmail())
-                    .name(u.getName())
-                    .role(u.getRole())
-                    .employeeId(u.getEmployeeId())
-                    .department(u.getDepartment())
-                    .avatarUrl(u.getAvatarUrl())
-                    .token(token)
-                    .build());
+            return userOpt.map(u -> {
+                EmployeeEntity emp = null;
+                if (u.getEmployeeId() != null) {
+                    emp = employeeRepository.findById(u.getEmployeeId()).orElse(null);
+                }
+                return AuthResponse.builder()
+                        .id(u.getId())
+                        .username(u.getUsername())
+                        .email(u.getEmail())
+                        .name(u.getName())
+                        .role(u.getRole())
+                        .employeeId(u.getEmployeeId())
+                        .employeeCode(emp != null ? emp.getCode() : (u.getUsername() != null ? u.getUsername() : null))
+                        .department(u.getDepartment() != null ? u.getDepartment() : (emp != null ? emp.getDepartment() : null))
+                        .designation(emp != null ? emp.getDesignation() : null)
+                        .phone(emp != null ? emp.getPhone() : null)
+                        .monthlyCtc(emp != null ? emp.getMonthlyCtc() : null)
+                        .avatarUrl(u.getAvatarUrl())
+                        .token(token)
+                        .build();
+            });
         } catch (Exception e) {
             return Optional.empty();
         }

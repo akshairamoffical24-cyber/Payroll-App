@@ -1,12 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/app_strings.dart';
 import '../../../core/providers/app_providers.dart';
-import '../../../core/responsive/responsive.dart';
-import '../../../core/theme/aurora_background.dart';
-import '../../../core/theme/glassmorphic_container.dart';
 import '../../../shared/models/user.dart';
 import '../data/google_auth_service.dart';
 
@@ -19,15 +15,20 @@ class LoginScreen extends ConsumerStatefulWidget {
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
+  final _emailOrIdController = TextEditingController();
   final _passwordController = TextEditingController();
+
   bool _rememberMe = true;
   bool _obscurePassword = true;
   bool _isLoading = false;
   bool _isGoogleLoading = false;
+  String? _errorMessage;
 
-  int _selectedAuthTab = 0; // 0 = Admin / HR Portal, 1 = Employee Login (OTP)
-  final _employeeMobileController = TextEditingController();
+  // Mode: 0 = Employee Login, 1 = Admin / HR Portal, 2 = Mobile OTP Login
+  int _selectedAuthTab = 0;
+
+  // OTP Login Fields
+  final _mobileController = TextEditingController();
   final _otpController = TextEditingController();
   bool _isSendingOtp = false;
   bool _isOtpSent = false;
@@ -35,128 +36,43 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   String? _detectedEmployeeName;
 
   @override
+  void initState() {
+    super.initState();
+    // Default pre-fill for convenient employee testing
+    _emailOrIdController.text = 'EMP001';
+    _passwordController.text = 'emp123';
+  }
+
+  @override
   void dispose() {
-    _emailController.dispose();
+    _emailOrIdController.dispose();
     _passwordController.dispose();
-    _employeeMobileController.dispose();
+    _mobileController.dispose();
     _otpController.dispose();
     super.dispose();
   }
 
-  Future<void> _handleSendOtp() async {
-    final mobile = _employeeMobileController.text.trim();
-    if (mobile.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter your 10-digit registered mobile number'),
-          backgroundColor: AppColors.absent,
-        ),
-      );
-      return;
-    }
+  void _fillCredentials(String emailOrId, String password, {int tab = 0}) {
+    setState(() {
+      _selectedAuthTab = tab;
+      _emailOrIdController.text = emailOrId;
+      _passwordController.text = password;
+      _errorMessage = null;
+    });
+  }
+
+  Future<void> _handlePasswordLogin() async {
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() {
-      _isSendingOtp = true;
+      _isLoading = true;
+      _errorMessage = null;
     });
 
     try {
-      final res = await ref.read(authStateProvider.notifier).sendOtp(mobile);
-      if (!mounted) return;
-      final empName = res['employeeName'] as String?;
-      final otpCode = res['otp'] as String?;
-      setState(() {
-        _isOtpSent = true;
-        _detectedEmployeeName = empName;
-        if (otpCode != null && otpCode.isNotEmpty) {
-          _otpController.text = otpCode;
-        }
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'OTP sent to $mobile${empName != null ? " ($empName)" : ""}! Demo code: ${otpCode ?? "123456"}',
-                ),
-              ),
-            ],
-          ),
-          backgroundColor: AppColors.present,
-          duration: const Duration(seconds: 4),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      final err = e.toString().replaceAll('Exception:', '').trim();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(err.isNotEmpty ? err : 'Failed to send OTP. Please check your mobile number.'),
-          backgroundColor: AppColors.absent,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _isSendingOtp = false);
-    }
-  }
-
-  Future<void> _handleEmployeeOtpLogin() async {
-    final mobile = _employeeMobileController.text.trim();
-    final otp = _otpController.text.trim();
-
-    if (mobile.isEmpty || otp.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter your mobile number and the 6-digit OTP code'),
-          backgroundColor: AppColors.absent,
-        ),
-      );
-      return;
-    }
-
-    setState(() => _isVerifyingOtp = true);
-
-    try {
-      await ref.read(authStateProvider.notifier).loginWithOtp(
-            mobile: mobile,
-            otp: otp,
-          );
-
-      if (!mounted) return;
-
-      final currentUser = ref.read(authStateProvider);
-      if (currentUser?.role == UserRole.fieldStaff) {
-        context.go('/field-dashboard');
-      } else {
-        context.go('/dashboard');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      final err = e.toString().replaceAll('Exception:', '').trim();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Verification failed: $err'),
-          backgroundColor: AppColors.absent,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _isVerifyingOtp = false);
-    }
-  }
-
-  Future<void> _handleLogin() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
       await ref.read(authStateProvider.notifier).login(
-            emailOrId: _emailController.text,
-            password: _passwordController.text,
+            emailOrId: _emailOrIdController.text.trim(),
+            password: _passwordController.text.trim(),
           );
 
       if (!mounted) return;
@@ -169,56 +85,70 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Login failed: $e'),
-            backgroundColor: AppColors.absent,
-          ),
-        );
+        final raw = e.toString().replaceAll('Exception:', '').trim();
+        setState(() {
+          _errorMessage = raw.isNotEmpty
+              ? raw
+              : 'Invalid credentials. Please check your Employee ID / Email and password.';
+        });
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _handleGoogleSignIn() async {
-    setState(() => _isGoogleLoading = true);
+  Future<void> _handleSendOtp() async {
+    final mobile = _mobileController.text.trim();
+    if (mobile.isEmpty) {
+      setState(() => _errorMessage = 'Please enter your registered mobile number or Employee ID');
+      return;
+    }
+
+    setState(() {
+      _isSendingOtp = true;
+      _errorMessage = null;
+    });
 
     try {
-      GoogleAuthPayload? payload;
-      String? oauthError;
+      final res = await ref.read(authStateProvider.notifier).sendOtp(mobile);
+      if (!mounted) return;
 
-      try {
-        payload = await ref.read(googleAuthServiceProvider).signIn();
-      } catch (e) {
-        oauthError = e.toString();
-        debugPrint('[LoginScreen] Real Google Sign-In exception: $e');
-      }
-
-      // If sign-in was cancelled with no payload and no error
-      if (payload == null && oauthError == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Google Sign-In was cancelled.'),
-              duration: Duration(seconds: 2),
-            ),
-          );
+      final empName = res['employeeName'] as String?;
+      final otpCode = res['otp'] as String?;
+      setState(() {
+        _isOtpSent = true;
+        _detectedEmployeeName = empName;
+        if (otpCode != null && otpCode.isNotEmpty) {
+          _otpController.text = otpCode;
         }
-        return;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceAll('Exception:', '').trim();
+        });
       }
+    } finally {
+      if (mounted) setState(() => _isSendingOtp = false);
+    }
+  }
 
-      // If there was an OAuth configuration issue (e.g. Origin not allowed, invalid client id, or popup blocked)
-      if (payload == null && oauthError != null && mounted) {
-        payload = await _showGoogleOAuthTroubleshootDialog(oauthError);
-      }
+  Future<void> _handleOtpLogin() async {
+    final mobile = _mobileController.text.trim();
+    final otp = _otpController.text.trim();
 
-      if (payload == null) {
-        return;
-      }
+    if (mobile.isEmpty || otp.isEmpty) {
+      setState(() => _errorMessage = 'Please enter both mobile/ID and 6-digit OTP');
+      return;
+    }
 
-      await ref.read(authStateProvider.notifier).signInWithGoogle(payload: payload);
+    setState(() {
+      _isVerifyingOtp = true;
+      _errorMessage = null;
+    });
 
+    try {
+      await ref.read(authStateProvider.notifier).loginWithOtp(mobile: mobile, otp: otp);
       if (!mounted) return;
 
       final currentUser = ref.read(authStateProvider);
@@ -228,241 +158,107 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         context.go('/dashboard');
       }
     } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceAll('Exception:', '').trim();
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isVerifyingOtp = false);
+    }
+  }
+
+  Future<void> _handleGoogleSignIn() async {
+    setState(() {
+      _isGoogleLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      GoogleAuthPayload? payload;
+      String? oauthError;
+
+      try {
+        payload = await ref.read(googleAuthServiceProvider).signIn();
+      } catch (e) {
+        oauthError = e.toString();
+      }
+
+      if (payload == null && oauthError == null) {
+        return; // cancelled
+      }
+
+      if (payload == null && oauthError != null && mounted) {
+        payload = await _showGoogleFallbackDialog(oauthError);
+      }
+
+      if (payload == null) return;
+
+      await ref.read(authStateProvider.notifier).signInWithGoogle(payload: payload);
       if (!mounted) return;
 
-      final errorMessage = e.toString().replaceAll('Exception:', '').trim();
-      final isUnauthorized = errorMessage.toLowerCase().contains('not authorized') ||
-          errorMessage.toLowerCase().contains('unauthorized');
-
-      if (isUnauthorized) {
-        showDialog(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-            title: const Row(
-              children: [
-                Icon(Icons.g_mobiledata_rounded, color: AppColors.absent, size: 36),
-                SizedBox(width: 8),
-                Text('Access Restricted', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  errorMessage.isNotEmpty
-                      ? errorMessage
-                      : 'Your Google account is not authorized to access this system. Please contact the administrator.',
-                  style: const TextStyle(fontSize: 14, height: 1.4),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.absent.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: AppColors.absent.withOpacity(0.25)),
-                  ),
-                  child: const Text(
-                    'Note: Only registered employees and enterprise staff accounts can log in.',
-                    style: TextStyle(fontSize: 12, color: AppColors.absent, fontWeight: FontWeight.w500),
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Back to Login', style: TextStyle(color: Colors.white)),
-              ),
-            ],
-          ),
-        );
+      final currentUser = ref.read(authStateProvider);
+      if (currentUser?.role == UserRole.fieldStaff) {
+        context.go('/field-dashboard');
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage.isNotEmpty ? errorMessage : 'Unable to sign in with Google. Please try again.'),
-            backgroundColor: AppColors.absent,
-          ),
-        );
+        context.go('/dashboard');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString().replaceAll('Exception:', '').trim();
+        });
       }
     } finally {
       if (mounted) setState(() => _isGoogleLoading = false);
     }
   }
 
-  Future<GoogleAuthPayload?> _showGoogleOAuthTroubleshootDialog(String error) async {
-    final customEmailCtrl = TextEditingController();
+  Future<GoogleAuthPayload?> _showGoogleFallbackDialog(String error) async {
+    final emailCtrl = TextEditingController(text: 'akshairamoffical24@gmail.com');
     return showDialog<GoogleAuthPayload>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Row(
           children: [
-            _GoogleLogoIcon(size: 24),
-            SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Google OAuth Setup & Fallback',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            _GoogleLogoIcon(size: 22),
+            SizedBox(width: 10),
+            Text('Google Account Test Sign-In', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('OAuth note: $error', style: const TextStyle(fontSize: 11.5, color: Colors.grey)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: emailCtrl,
+              decoration: InputDecoration(
+                labelText: 'Registered Google Email',
+                prefixIcon: const Icon(Icons.email_outlined, size: 20),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
             ),
           ],
         ),
-        content: SizedBox(
-          width: 440,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.amber.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(Icons.info_outline, color: Colors.amber, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Google OAuth popup encountered:\n${error.length > 120 ? "${error.substring(0, 120)}..." : error}',
-                          style: const TextStyle(fontSize: 12, height: 1.3),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-                const Text(
-                  'To use your official Google Cloud credentials:',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 6),
-                const Text(
-                  '1. Add your Google OAuth Web Client ID in "lib/core/config/auth_config.dart"\n2. Add Authorized JavaScript origin: "http://localhost:7357" in Google Cloud Console.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.4),
-                ),
-                const Divider(height: 24),
-                const Text(
-                  'Or test with registered enterprise accounts in development:',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 10),
-                _googleAccountTile(
-                  ctx,
-                  name: 'Alexander Wright',
-                  email: 'admin@workpulse.com',
-                  roleTag: 'ADMIN',
-                  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-                ),
-                _googleAccountTile(
-                  ctx,
-                  name: 'Sarah Jenkins',
-                  email: 'sarah.j@workpulse.io',
-                  roleTag: 'HR',
-                  avatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150',
-                ),
-                _googleAccountTile(
-                  ctx,
-                  name: 'Rajesh Kumar',
-                  email: 'rajesh.k@workpulse.io',
-                  roleTag: 'FIELD STAFF',
-                  avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: customEmailCtrl,
-                  decoration: InputDecoration(
-                    hintText: 'Enter your real Google email to test',
-                    prefixIcon: const Icon(Icons.email_outlined, size: 18),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton(
-                  onPressed: () {
-                    final email = customEmailCtrl.text.trim();
-                    if (email.isNotEmpty) {
-                      Navigator.pop(
-                        ctx,
-                        GoogleAuthPayload(
-                          email: email,
-                          name: email.split('@').first,
-                          idToken: 'DIRECT_GOOGLE_TOKEN_$email',
-                        ),
-                      );
-                    }
-                  },
-                  child: const Center(child: Text('Test with this Email')),
-                ),
-              ],
-            ),
-          ),
-        ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, null),
-            child: const Text('Cancel'),
+          TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6366F1)),
+            onPressed: () {
+              final em = emailCtrl.text.trim();
+              if (em.isNotEmpty) {
+                Navigator.pop(
+                  ctx,
+                  GoogleAuthPayload(email: em, name: em.split('@').first, idToken: 'GOOGLE_TOKEN_$em'),
+                );
+              }
+            },
+            child: const Text('Continue', style: TextStyle(color: Colors.white)),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _googleAccountTile(
-    BuildContext ctx, {
-    required String name,
-    required String email,
-    required String roleTag,
-    required String avatar,
-  }) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Colors.grey.withOpacity(0.2)),
-      ),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundImage: NetworkImage(avatar),
-          radius: 18,
-        ),
-        title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-        subtitle: Text(email, style: const TextStyle(fontSize: 11)),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            roleTag,
-            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.primary),
-          ),
-        ),
-        onTap: () {
-          Navigator.pop(
-            ctx,
-            GoogleAuthPayload(
-              email: email,
-              name: name,
-              avatarUrl: avatar,
-              idToken: 'TOKEN_$email',
-            ),
-          );
-        },
       ),
     );
   }
@@ -470,47 +266,40 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final isDesktop = Responsive.isDesktop(context);
 
     return Scaffold(
-      body: AuroraBackground(
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: BoxDecoration(
+          gradient: isDark
+              ? const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFF0F172A),
+                    Color(0xFF1E1B4B),
+                    Color(0xFF1E293B),
+                  ],
+                )
+              : const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFFE0F2FE), // soft light cyan / blue
+                    Color(0xFFEDE9FE), // soft blue / lavender
+                    Color(0xFFFCE7F3), // soft pink / purple
+                  ],
+                ),
+        ),
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: Responsive.pagePadding(context),
-              child: isDesktop
-                  ? Center(
-                      child: Container(
-                        constraints: const BoxConstraints(maxWidth: 1080),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            // Left Column: Enterprise Hero Showcase
-                            Expanded(
-                              flex: 6,
-                              child: Padding(
-                                padding: const EdgeInsets.only(right: 48),
-                                child: _buildHeroShowcase(isDark),
-                              ),
-                            ),
-                            // Right Column: Glassmorphic Login Form Card
-                            Expanded(
-                              flex: 5,
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(maxWidth: 460),
-                                child: _buildLoginFormCard(isDark),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                  : Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 460),
-                        child: _buildLoginFormCard(isDark),
-                      ),
-                    ),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 440),
+                child: _buildLoginCard(isDark),
+              ),
             ),
           ),
         ),
@@ -518,108 +307,50 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 
-  Widget _buildHeroShowcase(bool isDark) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+  Widget _buildLoginCard(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E293B).withOpacity(0.92) : Colors.white.withOpacity(0.92),
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF6366F1).withOpacity(isDark ? 0.2 : 0.08),
+            blurRadius: 30,
+            offset: const Offset(0, 10),
           ),
-          child: const Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              Icon(Icons.shield_rounded, size: 16, color: AppColors.primary),
-              SizedBox(width: 8),
-              Text(
-                'Next-Gen Workforce & Attendance Platform',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppColors.primary),
-              ),
-            ],
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
+        ],
+        border: Border.all(
+          color: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.8),
+          width: 1.5,
         ),
-        const SizedBox(height: 20),
-        Text(
-          'Automated Staff Attendance\n& Payroll Capture System',
-          style: TextStyle(
-            fontSize: 34,
-            fontWeight: FontWeight.w900,
-            height: 1.2,
-            letterSpacing: -0.8,
-            color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-          ),
-        ),
-        const SizedBox(height: 14),
-        Text(
-          'Geofenced mobile check-ins, biometric synchronization, multi-format Excel imports, and real-time analytical audit trails in a single unified dashboard.',
-          style: TextStyle(
-            fontSize: 15,
-            height: 1.5,
-            color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-          ),
-        ),
-        const SizedBox(height: 28),
-        _buildFeatureItem(Icons.gps_fixed_rounded, 'Precision GPS Geofencing', 'Site-aware mobile punch verification with strict radius checks.', isDark),
-        const SizedBox(height: 16),
-        _buildFeatureItem(Icons.fingerprint_rounded, 'Biometric & Hybrid Capture', 'Instant terminal integration with live attendance streams.', isDark),
-        const SizedBox(height: 16),
-        _buildFeatureItem(Icons.assessment_rounded, '15 Exportable Report Categories', 'Instant Excel, CSV, and formatted PDF register downloads.', isDark),
-      ],
-    );
-  }
-
-  Widget _buildFeatureItem(IconData icon, String title, String subtitle, bool isDark) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(icon, color: AppColors.primary, size: 20),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-              const SizedBox(height: 2),
-              Text(subtitle, style: TextStyle(fontSize: 12, color: isDark ? Colors.grey : Colors.black54)),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildLoginFormCard(bool isDark) {
-    return GlassmorphicContainer(
-      padding: Responsive.cardPadding(context),
-      borderRadius: 24,
+      ),
       child: Form(
         key: _formKey,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Brand Logo & Header
+            // Logo & Branding
             Center(
               child: Container(
-                width: 56,
-                height: 56,
+                width: 62,
+                height: 62,
                 decoration: BoxDecoration(
-                  gradient: AppColors.primaryGradient,
-                  borderRadius: BorderRadius.circular(18),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.primary.withOpacity(0.4),
+                      color: const Color(0xFF6366F1).withOpacity(0.35),
                       blurRadius: 16,
                       offset: const Offset(0, 6),
                     ),
@@ -628,7 +359,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 child: const Icon(
                   Icons.fingerprint_rounded,
                   color: Colors.white,
-                  size: 34,
+                  size: 38,
                 ),
               ),
             ),
@@ -640,254 +371,152 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 fontSize: 24,
                 fontWeight: FontWeight.w800,
                 letterSpacing: -0.5,
-                color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                color: isDark ? Colors.white : const Color(0xFF1E293B),
               ),
             ),
             const SizedBox(height: 4),
             Text(
-              AppStrings.appTagline,
+              _selectedAuthTab == 1
+                  ? 'Administrator & Management Portal'
+                  : 'Employee Attendance & Payroll Portal',
               textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 12.5,
-                color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
               ),
             ),
 
+            const SizedBox(height: 22),
+
+            // Tab Selector: [ Employee Login ] | [ Admin / HR ] | [ Mobile OTP ]
+            _buildTabSelector(isDark),
+
             const SizedBox(height: 18),
 
-            // Mode Selector Tabs: [ Admin / HR Portal ] | [ Employee Login (OTP) ]
-            _buildLoginModeSelector(isDark),
+            // Quick Credentials Chips (Developer & Testing Assistance)
+            _buildQuickRoleChips(isDark),
 
             const SizedBox(height: 18),
 
-            if (_selectedAuthTab == 0) ...[
-              // Quick Role Switcher Pills for Testing
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                alignment: WrapAlignment.center,
-                children: [
-                  _buildQuickRoleChip('Admin', 'admin@workpulse.com', 'admin123'),
-                  _buildQuickRoleChip('HR Manager', 'hr@workpulse.com', 'hr123'),
-                  _buildQuickRoleChip('Field Staff', 'field@workpulse.com', 'field123'),
-                ],
-              ),
-
-              const SizedBox(height: 18),
-
-              // Work Email / Emp ID Input
-              TextFormField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Work Email ID (Admin / HR Login)',
-                  hintText: 'e.g. admin@workpulse.com',
-                  prefixIcon: Icon(Icons.email_outlined, size: 20),
+            // Error banner if any
+            if (_errorMessage != null) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
                 ),
-                validator: (val) {
-                  if (val == null || val.trim().isEmpty) {
-                    return 'Please enter your Work Email ID';
-                  }
-                  return null;
-                },
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _errorMessage!,
+                        style: const TextStyle(fontSize: 12.5, color: Colors.redAccent, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               const SizedBox(height: 14),
-
-              // Password Input
-              TextFormField(
-                controller: _passwordController,
-                obscureText: _obscurePassword,
-                decoration: InputDecoration(
-                  labelText: AppStrings.password,
-                  hintText: 'Enter your password',
-                  prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                      size: 20,
-                    ),
-                    onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                  ),
-                ),
-                validator: (val) {
-                  if (val == null || val.isEmpty) {
-                    return 'Please enter your password';
-                  }
-                  return null;
-                },
-              ),
-
-              const SizedBox(height: 12),
-
-              // Remember Me & Forgot Password
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: Checkbox(
-                          value: _rememberMe,
-                          onChanged: (val) => setState(() => _rememberMe = val ?? true),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        AppStrings.rememberMe,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Password reset instructions sent to your email.')),
-                      );
-                    },
-                    child: const Text(
-                      AppStrings.forgotPassword,
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 18),
-
-              // Manual Sign In Button
-              ElevatedButton(
-                onPressed: (_isLoading || _isGoogleLoading) ? null : _handleLogin,
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
-                      )
-                    : const Text(
-                        AppStrings.signIn,
-                        style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
-                      ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Divider "OR CONTINUE WITH"
-              Row(
-                children: [
-                  Expanded(child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder)),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: Text(
-                      'OR CONTINUE WITH',
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.5,
-                        color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                      ),
-                    ),
-                  ),
-                  Expanded(child: Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder)),
-                ],
-              ),
-
-              const SizedBox(height: 14),
-
-              // Google Sign In Button
-              OutlinedButton(
-                onPressed: (_isLoading || _isGoogleLoading) ? null : _handleGoogleSignIn,
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  side: BorderSide(
-                    color: isDark ? Colors.white.withOpacity(0.18) : Colors.black.withOpacity(0.12),
-                  ),
-                  backgroundColor: isDark ? Colors.white.withOpacity(0.04) : Colors.white.withOpacity(0.7),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                child: _isGoogleLoading
-                    ? const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2.2, color: AppColors.primary),
-                          ),
-                          SizedBox(width: 10),
-                          Text(
-                            'Authenticating with Google...',
-                            style: TextStyle(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      )
-                    : Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const _GoogleLogoIcon(size: 18),
-                          const SizedBox(width: 10),
-                          Text(
-                            AppStrings.signInWithGoogle,
-                            style: TextStyle(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w600,
-                              color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-              ),
-            ] else ...[
-              _buildEmployeeLoginForm(isDark),
             ],
+
+            // Login Forms based on selected Tab
+            if (_selectedAuthTab == 2)
+              _buildOtpForm(isDark)
+            else
+              _buildStandardLoginForm(isDark),
+
+            const SizedBox(height: 16),
+
+            // Divider: OR
+            Row(
+              children: [
+                Expanded(child: Divider(color: isDark ? Colors.white12 : Colors.black12)),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    'OR CONTINUE WITH',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
+                      color: isDark ? Colors.white38 : Colors.black38,
+                    ),
+                  ),
+                ),
+                Expanded(child: Divider(color: isDark ? Colors.white12 : Colors.black12)),
+              ],
+            ),
+
+            const SizedBox(height: 14),
+
+            // Google Sign In
+            OutlinedButton(
+              onPressed: (_isLoading || _isGoogleLoading) ? null : _handleGoogleSignIn,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 13),
+                side: BorderSide(color: isDark ? Colors.white24 : const Color(0xFFE2E8F0)),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                backgroundColor: isDark ? Colors.white.withOpacity(0.04) : Colors.white,
+              ),
+              child: _isGoogleLoading
+                  ? const SizedBox(
+                      height: 20,
+                      width: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.2, color: Color(0xFF6366F1)),
+                    )
+                  : const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _GoogleLogoIcon(size: 19),
+                        SizedBox(width: 10),
+                        Text(
+                          'Sign in with Google',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildLoginModeSelector(bool isDark) {
+  Widget _buildTabSelector(bool isDark) {
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: isDark ? Colors.white.withOpacity(0.06) : Colors.black.withOpacity(0.04),
+        color: isDark ? Colors.white.withOpacity(0.06) : const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.06),
-        ),
       ),
       child: Row(
         children: [
           Expanded(
-            child: _buildModeTab(
+            child: _buildTabButton(
+              title: 'Employee',
+              icon: Icons.person_rounded,
               index: 0,
-              icon: Icons.admin_panel_settings_rounded,
-              label: 'Admin / HR',
-              isSelected: _selectedAuthTab == 0,
               isDark: isDark,
             ),
           ),
-          const SizedBox(width: 4),
           Expanded(
-            child: _buildModeTab(
+            child: _buildTabButton(
+              title: 'Admin / HR',
+              icon: Icons.admin_panel_settings_rounded,
               index: 1,
-              icon: Icons.person_pin_circle_rounded,
-              label: 'Employee (OTP)',
-              isSelected: _selectedAuthTab == 1,
+              isDark: isDark,
+            ),
+          ),
+          Expanded(
+            child: _buildTabButton(
+              title: 'Mobile OTP',
+              icon: Icons.sms_outlined,
+              index: 2,
               isDark: isDark,
             ),
           ),
@@ -896,31 +525,41 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 
-  Widget _buildModeTab({
-    required int index,
+  Widget _buildTabButton({
+    required String title,
     required IconData icon,
-    required String label,
-    required bool isSelected,
+    required int index,
     required bool isDark,
   }) {
+    final isSelected = _selectedAuthTab == index;
     return InkWell(
       onTap: () {
         setState(() {
           _selectedAuthTab = index;
+          _errorMessage = null;
+          if (index == 0) {
+            _emailOrIdController.text = 'EMP001';
+            _passwordController.text = 'emp123';
+          } else if (index == 1) {
+            _emailOrIdController.text = 'admin@workpulse.com';
+            _passwordController.text = 'admin123';
+          }
         });
       },
       borderRadius: BorderRadius.circular(10),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 9),
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected ? AppColors.primary : Colors.transparent,
+          color: isSelected
+              ? (isDark ? const Color(0xFF6366F1) : Colors.white)
+              : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
           boxShadow: isSelected
               ? [
                   BoxShadow(
-                    color: AppColors.primary.withOpacity(0.35),
-                    blurRadius: 8,
+                    color: Colors.black.withOpacity(0.06),
+                    blurRadius: 6,
                     offset: const Offset(0, 2),
                   ),
                 ]
@@ -931,20 +570,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           children: [
             Icon(
               icon,
-              size: 16,
+              size: 14,
               color: isSelected
-                  ? Colors.white
-                  : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                  ? (isDark ? Colors.white : const Color(0xFF6366F1))
+                  : (isDark ? Colors.white60 : Colors.black54),
             ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected
-                    ? Colors.white
-                    : (isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected
+                      ? (isDark ? Colors.white : const Color(0xFF1E293B))
+                      : (isDark ? Colors.white60 : Colors.black54),
+                ),
               ),
             ),
           ],
@@ -953,102 +596,216 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 
-  Widget _buildEmployeeLoginForm(bool isDark) {
+  Widget _buildQuickRoleChips(bool isDark) {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      alignment: WrapAlignment.center,
+      children: [
+        _buildChip('AKSHAIRAM (EMP001)', () => _fillCredentials('EMP001', 'emp123', tab: 0)),
+        _buildChip('Admin', () => _fillCredentials('admin@workpulse.com', 'admin123', tab: 1)),
+        _buildChip('HR Manager', () => _fillCredentials('hr@workpulse.com', 'hr123', tab: 1)),
+        _buildChip('Field Staff', () => _fillCredentials('field@workpulse.com', 'field123', tab: 0)),
+      ],
+    );
+  }
+
+  Widget _buildChip(String label, VoidCallback onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF6366F1).withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF6366F1).withOpacity(0.2)),
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF6366F1),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStandardLoginForm(bool isDark) {
+    final isEmployee = _selectedAuthTab == 0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Employee Info Banner
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+        // Email / Employee ID Field
+        TextFormField(
+          controller: _emailOrIdController,
+          keyboardType: TextInputType.text,
+          decoration: InputDecoration(
+            labelText: isEmployee ? 'Employee Email / Employee ID' : 'Work Email / Username',
+            hintText: isEmployee ? 'e.g. EMP001 or akshairam@freelanceconscom.com' : 'e.g. admin@workpulse.com',
+            prefixIcon: const Icon(Icons.badge_outlined, size: 20),
+            filled: true,
+            fillColor: isDark ? Colors.white.withOpacity(0.04) : const Color(0xFFF8FAFC),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: Color(0xFF6366F1), width: 1.8),
+            ),
           ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.badge_rounded, color: AppColors.primary, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Field Staff & Employee Portal',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                        color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Sign in with your registered phone number to mark attendance and access self-service.',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+          validator: (val) => (val == null || val.trim().isEmpty) ? 'Please enter your ID or Email' : null,
         ),
 
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
 
-        // Quick Test Helper Chips
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          alignment: WrapAlignment.center,
+        // Password Field with Show/Hide Toggle
+        TextFormField(
+          controller: _passwordController,
+          obscureText: _obscurePassword,
+          decoration: InputDecoration(
+            labelText: AppStrings.password,
+            hintText: 'Enter your password',
+            prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
+            suffixIcon: IconButton(
+              icon: Icon(
+                _obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                size: 20,
+              ),
+              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+            ),
+            filled: true,
+            fillColor: isDark ? Colors.white.withOpacity(0.04) : const Color(0xFFF8FAFC),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: BorderSide(color: isDark ? Colors.white12 : const Color(0xFFE2E8F0)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(14),
+              borderSide: const BorderSide(color: Color(0xFF6366F1), width: 1.8),
+            ),
+          ),
+          validator: (val) => (val == null || val.isEmpty) ? 'Please enter your password' : null,
+        ),
+
+        const SizedBox(height: 10),
+
+        // Remember Me & Forgot Password
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            _buildQuickEmployeeChip('AKSHAIRAM (EMP001)', '6374990354'),
-            _buildQuickEmployeeChip('Field Staff (EMP048)', '9876543210'),
+            Flexible(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: Checkbox(
+                      value: _rememberMe,
+                      onChanged: (val) => setState(() => _rememberMe = val ?? true),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      'Remember me',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white70 : const Color(0xFF64748B),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            TextButton(
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Password reset instructions sent to your registered email.')),
+                );
+              },
+              child: const Text(
+                'Forgot password?',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF6366F1)),
+              ),
+            ),
           ],
         ),
 
         const SizedBox(height: 16),
 
-        // Mobile Number Field
+        // Sign In Button
+        ElevatedButton(
+          onPressed: (_isLoading || _isGoogleLoading) ? null : _handlePasswordLogin,
+          style: ElevatedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            backgroundColor: const Color(0xFF6366F1),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          child: _isLoading
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                )
+              : Text(
+                  isEmployee ? 'Sign In as Employee' : 'Sign In to Management',
+                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildOtpForm(bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         TextFormField(
-          controller: _employeeMobileController,
-          keyboardType: TextInputType.phone,
+          controller: _mobileController,
+          keyboardType: TextInputType.text,
           decoration: InputDecoration(
-            labelText: 'Registered Mobile Number',
-            hintText: 'e.g. 6374990354',
+            labelText: 'Registered Mobile Number or Employee ID',
+            hintText: 'e.g. 6374990354 or EMP001',
             prefixIcon: const Icon(Icons.phone_iphone_rounded, size: 20),
-            suffixIcon: Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: TextButton(
-                onPressed: _isSendingOtp ? null : _handleSendOtp,
-                child: _isSendingOtp
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(
-                        _isOtpSent ? 'Resend' : 'Send OTP',
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                      ),
-              ),
+            suffixIcon: TextButton(
+              onPressed: _isSendingOtp ? null : _handleSendOtp,
+              child: _isSendingOtp
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text(
+                      _isOtpSent ? 'Resend' : 'Send OTP',
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
             ),
+            filled: true,
+            fillColor: isDark ? Colors.white.withOpacity(0.04) : const Color(0xFFF8FAFC),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
           ),
         ),
-
         if (_isOtpSent) ...[
-          const SizedBox(height: 14),
-
-          // OTP Code Field
+          const SizedBox(height: 12),
           TextFormField(
             controller: _otpController,
             keyboardType: TextInputType.number,
@@ -1056,140 +813,49 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             decoration: InputDecoration(
               counterText: '',
               labelText: '6-Digit OTP Code',
-              hintText: 'Enter 6-digit OTP (Demo: 123456)',
-              prefixIcon: const Icon(Icons.key_rounded, size: 20),
+              hintText: 'Demo code: 123456',
+              prefixIcon: const Icon(Icons.security_rounded, size: 20),
               suffixIcon: IconButton(
+                icon: const Icon(Icons.auto_fix_high_rounded, size: 18, color: Color(0xFF6366F1)),
                 tooltip: 'Fill Demo OTP (123456)',
-                icon: const Icon(Icons.auto_fix_high_rounded, size: 18, color: AppColors.primary),
-                onPressed: () {
-                  setState(() => _otpController.text = '123456');
-                },
+                onPressed: () => setState(() => _otpController.text = '123456'),
               ),
+              filled: true,
+              fillColor: isDark ? Colors.white.withOpacity(0.04) : const Color(0xFFF8FAFC),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
             ),
           ),
-
-          const SizedBox(height: 6),
-
-          // Matched Employee Badge
-          if (_detectedEmployeeName != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-              child: Row(
-                children: [
-                  const Icon(Icons.person_outline_rounded, size: 14, color: AppColors.present),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Matched Employee: $_detectedEmployeeName',
-                    style: const TextStyle(fontSize: 12, color: AppColors.present, fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
+          if (_detectedEmployeeName != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Matched Employee: $_detectedEmployeeName',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF10B981), fontWeight: FontWeight.w600),
             ),
+          ],
         ],
-
-        const SizedBox(height: 20),
-
-        // Action Button: Send OTP or Verify & Login
+        const SizedBox(height: 16),
         ElevatedButton(
           onPressed: (_isSendingOtp || _isVerifyingOtp)
               ? null
-              : (_isOtpSent ? _handleEmployeeOtpLogin : _handleSendOtp),
+              : (_isOtpSent ? _handleOtpLogin : _handleSendOtp),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            backgroundColor: const Color(0xFF6366F1),
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           ),
           child: (_isSendingOtp || _isVerifyingOtp)
               ? const SizedBox(
                   height: 20,
                   width: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white),
+                  child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
                 )
-              : Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      _isOtpSent ? Icons.login_rounded : Icons.sms_outlined,
-                      size: 18,
-                      color: Colors.white,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _isOtpSent ? 'Verify & Login as Employee' : 'Send OTP via Mobile',
-                      style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
-                    ),
-                  ],
+              : Text(
+                  _isOtpSent ? 'Verify OTP & Log In' : 'Send One-Time Password',
+                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700),
                 ),
         ),
-
-        const SizedBox(height: 12),
-
-        // Helper Note
-        Center(
-          child: Text(
-            'In development mode, Demo OTP is 123456.',
-            style: TextStyle(
-              fontSize: 11.5,
-              color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-            ),
-          ),
-        ),
       ],
-    );
-  }
-
-  Widget _buildQuickEmployeeChip(String label, String mobile) {
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _employeeMobileController.text = mobile;
-          _otpController.text = '123456';
-          _isOtpSent = true;
-        });
-      },
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: AppColors.present.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.present.withOpacity(0.25)),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.bolt_rounded, size: 13, color: AppColors.present),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.present),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildQuickRoleChip(String label, String email, String password) {
-    return InkWell(
-      onTap: () {
-        setState(() {
-          _emailController.text = email;
-          _passwordController.text = password;
-        });
-      },
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.primary.withOpacity(0.25)),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primary),
-        ),
-      ),
     );
   }
 }
@@ -1228,23 +894,18 @@ class _GoogleLogoPainter extends CustomPainter {
 
     final rect = Rect.fromCircle(center: center, radius: radius - strokeW / 2);
 
-    // Blue arc (Right & top-right)
     paint.color = blue;
     canvas.drawArc(rect, -0.7, 1.4, false, paint);
 
-    // Green arc (Bottom)
     paint.color = green;
     canvas.drawArc(rect, 0.7, 1.4, false, paint);
 
-    // Yellow arc (Left & Bottom-left)
     paint.color = yellow;
     canvas.drawArc(rect, 2.1, 1.4, false, paint);
 
-    // Red arc (Top)
     paint.color = red;
     canvas.drawArc(rect, 3.5, 1.4, false, paint);
 
-    // Center horizontal bar for Google G
     final barPaint = Paint()
       ..color = blue
       ..style = PaintingStyle.fill;

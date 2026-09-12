@@ -69,7 +69,7 @@ class MockAuditRepository implements AuditRepository {
       module: 'Sites',
       entityType: 'Site',
       entityId: 'SITE-001',
-      actorName: 'Alexander Wright',
+      actorName: 'Premkumar',
       actorRole: 'Administrator',
       description: 'Created new site location: CTS Chennai Campus',
       details: 'Created site CTS Chennai Campus with 200m geofence radius at coordinates (12.9012, 80.2281)',

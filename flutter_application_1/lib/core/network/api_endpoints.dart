@@ -40,6 +40,10 @@ class ApiEndpoints {
   // Biometric
   static String get ingestBiometric => '$baseUrl/biometric/ingest';
 
+  // Leaves
+  static String get leaves => '$baseUrl/leaves';
+  static String leavesForEmployee(String employeeId) => '$baseUrl/leaves/employee/$employeeId';
+
   // Regularization
   static String get regularization => '$baseUrl/regularization';
   static String regularizationForEmployee(String employeeId) => '$baseUrl/regularization/employee/$employeeId';
